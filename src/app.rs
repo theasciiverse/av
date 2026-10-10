@@ -70,6 +70,7 @@ pub enum Hit {
     /// an action button, by index into `actions()`
     Button(usize),
     List,
+    Search,
     Detail,
 }
 
@@ -183,6 +184,8 @@ impl App {
                     || t.title.to_lowercase().contains(&f)
                     || t.topics.iter().any(|x| x.to_lowercase().contains(&f))
                     || t.genre.as_deref().is_some_and(|g| g.to_lowercase().contains(&f))
+                    || t.developer.as_ref().is_some_and(|d| d.name.to_lowercase().contains(&f))
+                    || t.description.to_lowercase().contains(&f)
             })
             .collect()
     }
@@ -432,6 +435,8 @@ impl App {
                 }
             }
             (MouseEventKind::Down(MouseButton::Left), Some(Hit::Detail)) => self.focus = Focus::Page,
+            // typing goes to the search box whenever the list has focus
+            (MouseEventKind::Down(MouseButton::Left), Some(Hit::Search | Hit::List)) => self.focus = Focus::List,
             (MouseEventKind::ScrollDown, Some(Hit::Row(_) | Hit::List)) => {
                 let n = self.visible().len();
                 self.select((self.selected + 1).min(n.saturating_sub(1)));

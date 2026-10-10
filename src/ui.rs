@@ -22,6 +22,8 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     let [head, body, foot] = Layout::vertical([Constraint::Length(2), Constraint::Min(5), Constraint::Length(1)]).areas(area);
     draw_header(f, app, head);
     let [list, detail] = Layout::horizontal([Constraint::Length(LIST_W), Constraint::Min(20)]).areas(body);
+    let [search, list] = Layout::vertical([Constraint::Length(3), Constraint::Min(3)]).areas(list);
+    draw_search(f, app, search);
     draw_list(f, app, list);
     app.hits.push((detail, Hit::Detail));
     match app.current() {
@@ -30,7 +32,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             let msg = match app.view {
                 View::Installed => "Nothing installed yet. Press → to see the whole catalog.",
                 View::Wishlist => "Your wishlist is empty.",
-                View::All if !app.filter.is_empty() => "Nothing matches the filter. Esc clears it.",
+                View::All if !app.filter.is_empty() => "Nothing matches the search. Esc clears it.",
                 View::All => "The catalog is empty.",
             };
             f.render_widget(Paragraph::new(msg).style(Style::default().fg(theme::DIM)).block(pane(false, "")), detail);
@@ -111,13 +113,6 @@ fn draw_header(f: &mut Frame, app: &mut App, area: Rect) {
         spans.push(Span::styled(label, st));
         spans.push(Span::raw(" "));
     }
-    spans.push(Span::styled("  / ", Style::default().fg(theme::GREEN)));
-    let filter = if app.filter.is_empty() { "type to filter".to_string() } else { format!("{}▏", app.filter) };
-    let fw = filter.chars().count().max(16);
-    spans.push(Span::styled(
-        format!("{filter:<fw$}"),
-        Style::default().fg(if app.filter.is_empty() { theme::FAINT } else { theme::TEXT_HI }),
-    ));
     let line = Line::from(spans);
     let lw_total = (line.width() as u16).min(rw);
     let lx = rx + rw - lw_total;
@@ -125,6 +120,32 @@ fn draw_header(f: &mut Frame, app: &mut App, area: Rect) {
     for (o, w, v) in tabs {
         app.hits.push((Rect { x: lx + o, y: area.y + 1, width: w, height: 1 }, Hit::Tab(v)));
     }
+}
+
+fn draw_search(f: &mut Frame, app: &mut App, area: Rect) {
+    let active = app.focus == Focus::List;
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(if !app.filter.is_empty() { theme::GREEN } else { theme::LINE }))
+        .title(Span::styled(" search ", Style::default().fg(theme::DIM)))
+        .style(Style::default().bg(theme::PANEL));
+    let mut spans = vec![Span::styled("/ ", Style::default().fg(theme::GREEN))];
+    if app.filter.is_empty() {
+        spans.push(Span::styled("type to search", Style::default().fg(theme::FAINT)));
+    } else {
+        spans.push(Span::styled(app.filter.clone(), Style::default().fg(theme::TEXT_HI)));
+        if active {
+            spans.push(Span::styled("▏", Style::default().fg(theme::GREEN)));
+        }
+        let n = app.visible().len();
+        let count = format!(" {n}");
+        let used: usize = spans.iter().map(|s| s.width()).sum();
+        let room = (area.width as usize).saturating_sub(2 + used + count.len());
+        spans.push(Span::raw(" ".repeat(room)));
+        spans.push(Span::styled(count, Style::default().fg(theme::FAINT)));
+    }
+    f.render_widget(Paragraph::new(Line::from(spans)).block(block), area);
+    app.hits.push((area, Hit::Search));
 }
 
 fn section_name(kind: &str) -> &'static str {
@@ -433,7 +454,7 @@ fn page_text(t: &Title) -> Text<'static> {
 
 fn draw_foot(f: &mut Frame, app: &App, area: Rect) {
     let hints = match app.focus {
-        Focus::List => "↑↓ select  ←→ view  type to filter  Enter actions  Tab panels  F5 refresh  Esc quit",
+        Focus::List => "↑↓ select  ←→ view  type to search  Enter actions  Tab panels  F5 refresh  Esc quit",
         Focus::Actions => "←→ choose  Enter do it  ↑↓ back to list  Tab page  Esc back",
         Focus::Page => "↑↓ scroll  Space pause preview  Tab list  Esc back",
     };
