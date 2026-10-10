@@ -100,7 +100,7 @@ fn launch(app: &mut App, t: &catalog::Title) {
         };
         log::info!("launch {} {}", t.id, exe.display());
         let mut cmd = std::process::Command::new(&exe);
-        cmd.current_dir(&dir);
+        cmd.args(&t.exec.args).current_dir(&dir);
         cmd
     };
     let log = app.paths.cache.join("logs").join(format!("{}.log", t.id));

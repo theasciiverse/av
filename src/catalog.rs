@@ -32,7 +32,7 @@ pub struct Title {
     pub funding: Option<String>,
     pub developer: Option<Person>,
     pub upstream: Option<Person>,
-    pub exec: BTreeMap<String, String>,
+    pub exec: Exec,
     pub min_terminal: Option<Size>,
     pub requires: Requires,
     pub system_deps: Vec<String>,
@@ -49,6 +49,16 @@ pub struct Title {
     // storefront curation (the OLD! and NEW! banners); no field in SCHEMA.md yet
     pub old: bool,
     pub new: bool,
+}
+
+/// `[exec]`: the binary to run, named by kind (`game = "greed"`), and the
+/// arguments av passes when it launches it (`args = ["-f"]`).
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct Exec {
+    #[serde(default)]
+    pub args: Vec<String>,
+    #[serde(flatten)]
+    pub names: BTreeMap<String, serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -90,7 +100,7 @@ pub struct Connect {
 impl Title {
     /// The binary inside the install dir: `[exec]` names it, else the id.
     pub fn exec_name(&self) -> String {
-        let base = self.exec.values().next().cloned().unwrap_or_else(|| self.id.clone());
+        let base = self.exec.names.values().find_map(|v| v.as_str().map(String::from)).unwrap_or_else(|| self.id.clone());
         if cfg!(windows) { format!("{base}.exe") } else { base }
     }
 
@@ -195,6 +205,15 @@ mod tests {
         assert_eq!(resolve(b, "casts/x.cast"), "http://127.0.0.1:8765/data/casts/x.cast");
         assert_eq!(resolve(b, "/casts/x.cast"), "http://127.0.0.1:8765/casts/x.cast");
         assert_eq!(resolve(b, "https://e.org/a"), "https://e.org/a");
+    }
+
+    #[test]
+    fn exec_name_and_args() {
+        let t: Title = serde_json::from_str(r#"{"id":"greed","exec":{"game":"greed","args":["-f"]}}"#).unwrap();
+        assert_eq!(t.exec.args, vec!["-f"]);
+        assert!(t.exec_name().starts_with("greed"));
+        let t: Title = serde_json::from_str(r#"{"id":"solitty"}"#).unwrap();
+        assert!(t.exec_name().starts_with("solitty"));
     }
 
     #[test]
