@@ -340,7 +340,7 @@ fn draw_preview(buf: &mut Buffer, app: &App, t: &Title, area: Rect) {
         _ => {
             Block::default().style(Style::default().bg(crate::cast::BG)).render(inner, buf);
             if t.is_mud() {
-                Paragraph::new(mud_card(t)).alignment(Alignment::Center).render(inner, buf);
+                Paragraph::new(mud_card(t, app.lera().is_some())).alignment(Alignment::Center).render(inner, buf);
             } else {
                 let msg = app.cast_note(t).unwrap_or_default();
                 let y = inner.y + inner.height / 2;
@@ -352,7 +352,7 @@ fn draw_preview(buf: &mut Buffer, app: &App, t: &Title, area: Rect) {
     }
 }
 
-fn mud_card(t: &Title) -> Text<'static> {
+fn mud_card(t: &Title, lera: bool) -> Text<'static> {
     let mut l = vec![Line::default(); 3];
     l.push(Line::from(Span::styled(t.title.to_uppercase(), Style::default().fg(theme::AMBER).add_modifier(Modifier::BOLD))));
     if let Some(s) = t.since {
@@ -360,11 +360,15 @@ fn mud_card(t: &Title) -> Text<'static> {
     }
     l.push(Line::default());
     if let Some(c) = &t.connect {
-        l.push(Line::from(Span::styled(format!("telnet {} {}", c.host, c.port), Style::default().fg(theme::GREEN_HI))));
+        l.push(Line::from(Span::styled(format!("{} {}", c.host, c.port), Style::default().fg(theme::GREEN_HI))));
     }
     l.push(Line::default());
-    l.push(Line::from(Span::styled("Lera, the Asciiverse MUD client, is in design.", Style::default().fg(theme::FAINT))));
-    l.push(Line::from(Span::styled("Until then Connect opens the world in telnet.", Style::default().fg(theme::FAINT))));
+    if lera {
+        l.push(Line::from(Span::styled("Connect opens the world in Lera.", Style::default().fg(theme::FAINT))));
+    } else {
+        l.push(Line::from(Span::styled("Install Lera, the Asciiverse MUD client, to play here.", Style::default().fg(theme::FAINT))));
+        l.push(Line::from(Span::styled("Until then Connect opens the world in telnet.", Style::default().fg(theme::FAINT))));
+    }
     Text::from(l)
 }
 

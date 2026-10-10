@@ -88,10 +88,18 @@ fn run(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> Result<()> {
 /// Run a title as a separate process in the same terminal; av never links it.
 fn launch(app: &mut App, t: &catalog::Title) {
     let cmd = if let Some(c) = &t.connect {
-        log::info!("connect {} {}:{}", t.id, c.host, c.port);
-        let mut cmd = std::process::Command::new("telnet");
-        cmd.arg(&c.host).arg(c.port.to_string());
-        cmd
+        // Lera finds the world by id in the same cached catalog; telnet is the fallback
+        if let Some(lera) = app.lera() {
+            log::info!("connect {} with {}", t.id, lera.display());
+            let mut cmd = std::process::Command::new(lera);
+            cmd.arg(&t.id);
+            cmd
+        } else {
+            log::info!("connect {} {}:{} with telnet", t.id, c.host, c.port);
+            let mut cmd = std::process::Command::new("telnet");
+            cmd.arg(&c.host).arg(c.port.to_string());
+            cmd
+        }
     } else {
         let dir = app.paths.title_dir(&t.kind, &t.id);
         let Some(exe) = install::find_exec(&dir, &t.exec_name()) else {

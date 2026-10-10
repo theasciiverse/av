@@ -185,7 +185,7 @@ impl App {
 
     pub fn visible(&self) -> Vec<&Title> {
         let f = self.filter.to_lowercase();
-        self.titles
+        let mut v: Vec<&Title> = self.titles
             .iter()
             .filter(|t| match self.view {
                 View::All => true,
@@ -200,7 +200,14 @@ impl App {
                     || t.developer.as_ref().is_some_and(|d| d.name.to_lowercase().contains(&f))
                     || t.description.to_lowercase().contains(&f)
             })
-            .collect()
+            .collect();
+        if !f.is_empty() {
+            // within each kind's group, titles whose name matches come first;
+            // sort_by_key is stable, so the alphabetical order is kept inside
+            let rank = |k: &str| match k { "game" => 0, "program" => 1, "movie" => 2, "mud" => 3, _ => 4 };
+            v.sort_by_key(|t| (rank(&t.kind), !t.title.to_lowercase().contains(&f)));
+        }
+        v
     }
 
     pub fn current(&self) -> Option<Title> {
@@ -612,6 +619,16 @@ impl App {
     }
 
     /// Back from a title: record play time, then say how it went.
+    /// Lera, the Asciiverse MUD client: installed through av as a program,
+    /// or anywhere on PATH.
+    pub fn lera(&self) -> Option<std::path::PathBuf> {
+        let name = if cfg!(windows) { "lera.exe" } else { "lera" };
+        crate::install::find_exec(&self.paths.title_dir("program", "lera"), name).or_else(|| {
+            let path = std::env::var_os("PATH")?;
+            std::env::split_paths(&path).map(|d| d.join(name)).find(|p| p.is_file())
+        })
+    }
+
     pub fn finished(&mut self, t: &Title, o: crate::launch::Outcome) {
         let p = self.state.played.entry(t.id.clone()).or_default();
         p.seconds += o.seconds;
@@ -645,7 +662,7 @@ impl App {
                 }
             },
             Err(e) if t.connect.is_some() && e.kind() == std::io::ErrorKind::NotFound => {
-                self.status = "telnet is not installed; Lera will replace it".into();
+                self.status = "Neither Lera nor telnet is installed; install Lera to play MUDs".into();
             }
             Err(e) => {
                 self.modal = Some(Modal::Message(format!("Could not start {}.\n\n{e}", t.title)));
