@@ -10,7 +10,8 @@ Status: design settled; first working cut built 2026-10-10 (catalog fetch
 and cache, list with views and filter, detail pane with the live `.cast`
 preview and page Markdown, install with sha256 check, uninstall, launch,
 wishlist, MUD connect via telnet). No downloads pane, intro, welcome screen
-or zip support yet. Local git repo only. This file is the canonical design.
+or zip support yet. Private repo: github.com/theasciiverse/av. This file is
+the canonical design.
 
 Run it against the website mockup's catalog (served on 127.0.0.1:8765 from
 `websites/Asciiverse`, whose `dev/build_catalog.py` packages locally built
@@ -51,8 +52,8 @@ developers.
 
 ## Stack
 
-Rust + Ratatui, one binary crate, its own git repo (`theasciiverse/av`, not
-created yet). Dependencies chosen so far, versions checked on crates.io
+Rust + Ratatui, one binary crate, its own private git repo
+(`theasciiverse/av`, created 2026-10-10). Dependencies, versions checked on crates.io
 2026-10-06:
 
 | Need | Crate | Notes |
@@ -64,8 +65,10 @@ created yet). Dependencies chosen so far, versions checked on crates.io
 | Logging | `log` + `env_logger` | per the session logging convention in `../CLAUDE.md` |
 | Page Markdown | `pulldown-cmark` 0.13 (MIT) | parses each title's `page`; `av` maps the allowed subset (`../hub/catalog/SCHEMA.md`) to Ratatui text |
 
-Still to pick: HTTP client, archive extraction (`tar` + `flate2`, `zip`),
-`sha2` for checksums. Nothing exotic is expected.
+Added in the first cut (2026-10-10): `ureq` 3.4 (HTTP, MIT OR Apache-2.0),
+`sha2` 0.11 (checksums), `tar` 0.4 + `flate2` 1.1 (`.tar.gz`), `serde` /
+`serde_json`, `anyhow`. Still to add: `zip` for Windows archives. Ratatui
+0.30's own crossterm re-export is used rather than a direct dependency.
 
 ## Catalog and updates
 
