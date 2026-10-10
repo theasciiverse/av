@@ -8,7 +8,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, List, ListItem, ListState, Paragraph, Widget, Wrap};
 
-use crate::app::{App, Focus, Modal, Status, View};
+use crate::app::{App, Focus, Hit, Modal, Status, View};
 use crate::catalog::Title;
 use crate::{md, theme};
 
@@ -16,12 +16,14 @@ use crate::{md, theme};
 const LIST_W: u16 = 26;
 
 pub fn draw(f: &mut Frame, app: &mut App) {
+    app.hits.clear();
     let area = f.area();
     f.render_widget(Block::default().style(Style::default().bg(theme::BG).fg(theme::TEXT)), area);
     let [head, body, foot] = Layout::vertical([Constraint::Length(2), Constraint::Min(5), Constraint::Length(1)]).areas(area);
     draw_header(f, app, head);
     let [list, detail] = Layout::horizontal([Constraint::Length(LIST_W), Constraint::Min(20)]).areas(body);
     draw_list(f, app, list);
+    app.hits.push((detail, Hit::Detail));
     match app.current() {
         Some(t) => draw_detail(f, app, &t, detail),
         None => {
@@ -64,14 +66,14 @@ fn logo_color(x: usize, width: usize) -> ratatui::style::Color {
     ratatui::style::Color::Rgb(mix(a.0, b.0), mix(a.1, b.1), mix(a.2, b.2))
 }
 
-fn draw_header(f: &mut Frame, app: &App, area: Rect) {
+fn draw_header(f: &mut Frame, app: &mut App, area: Rect) {
     f.render_widget(Block::default().style(Style::default().bg(theme::PANEL)), area);
 
-    // top right: the wordmark, with the slogan beside it on its two rows
+    // top left: the wordmark, with the slogan beside it on its two rows
     let lw = LOGO[0].chars().count();
     let sw = SLOGAN.iter().map(|s| s.chars().count()).max().unwrap_or(0);
     let total = (lw + 2 + sw) as u16;
-    let x0 = (area.x + area.width).saturating_sub(total + 1).max(area.x);
+    let x0 = area.x + 1;
     for row in 0..2u16 {
         let mut spans: Vec<Span> = LOGO[row as usize]
             .chars()
@@ -80,12 +82,22 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
             .collect();
         spans.push(Span::raw("  "));
         spans.push(Span::styled(SLOGAN[row as usize], Style::default().fg(theme::DIM)));
-        f.render_widget(Paragraph::new(Line::from(spans)), Rect { x: x0, y: area.y + row, width: total, height: 1 });
+        f.render_widget(Paragraph::new(Line::from(spans)), Rect { x: x0, y: area.y + row, width: total.min(area.width), height: 1 });
     }
 
-    // left: views and filter on top, catalog state below
-    let lw_left = x0.saturating_sub(area.x + 2);
-    let mut spans = vec![Span::raw(" ")];
+    // right: catalog state on top, views and filter below, right-aligned
+    let rx = x0 + total + 3;
+    let rw = (area.x + area.width).saturating_sub(rx + 1);
+    let info = if app.offline {
+        Span::styled("offline: showing the cached catalog", Style::default().fg(theme::AMBER))
+    } else {
+        Span::styled(format!("{} titles", app.titles.len()), Style::default().fg(theme::FAINT))
+    };
+    f.render_widget(Paragraph::new(Line::from(info)).alignment(Alignment::Right), Rect { x: rx, y: area.y, width: rw, height: 1 });
+
+    let mut spans = Vec::new();
+    let mut tabs = Vec::new(); // (offset, width, view) for mouse hits
+    let mut off = 0u16;
     for v in View::ALL {
         let on = v == app.view;
         let st = if on {
@@ -93,23 +105,26 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
         } else {
             Style::default().fg(theme::DIM)
         };
-        spans.push(Span::styled(format!(" {} ", v.label()), st));
+        let label = format!(" {} ", v.label());
+        tabs.push((off, label.chars().count() as u16, v));
+        off += label.chars().count() as u16 + 1;
+        spans.push(Span::styled(label, st));
         spans.push(Span::raw(" "));
     }
     spans.push(Span::styled("  / ", Style::default().fg(theme::GREEN)));
-    if app.filter.is_empty() {
-        spans.push(Span::styled("type to filter", Style::default().fg(theme::FAINT)));
-    } else {
-        spans.push(Span::styled(app.filter.clone(), Style::default().fg(theme::TEXT_HI)));
-        spans.push(Span::styled("▏", Style::default().fg(theme::GREEN)));
+    let filter = if app.filter.is_empty() { "type to filter".to_string() } else { format!("{}▏", app.filter) };
+    let fw = filter.chars().count().max(16);
+    spans.push(Span::styled(
+        format!("{filter:<fw$}"),
+        Style::default().fg(if app.filter.is_empty() { theme::FAINT } else { theme::TEXT_HI }),
+    ));
+    let line = Line::from(spans);
+    let lw_total = (line.width() as u16).min(rw);
+    let lx = rx + rw - lw_total;
+    f.render_widget(Paragraph::new(line), Rect { x: lx, y: area.y + 1, width: lw_total, height: 1 });
+    for (o, w, v) in tabs {
+        app.hits.push((Rect { x: lx + o, y: area.y + 1, width: w, height: 1 }, Hit::Tab(v)));
     }
-    f.render_widget(Paragraph::new(Line::from(spans)), Rect { x: area.x, y: area.y, width: lw_left, height: 1 });
-    let info = if app.offline {
-        Span::styled("  offline: showing the cached catalog", Style::default().fg(theme::AMBER))
-    } else {
-        Span::styled(format!("  {} titles", app.titles.len()), Style::default().fg(theme::FAINT))
-    };
-    f.render_widget(Paragraph::new(Line::from(info)), Rect { x: area.x, y: area.y + 1, width: lw_left, height: 1 });
 }
 
 fn section_name(kind: &str) -> &'static str {
@@ -122,13 +137,14 @@ fn section_name(kind: &str) -> &'static str {
     }
 }
 
-fn draw_list(f: &mut Frame, app: &App, area: Rect) {
+fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
     // the list is grouped by kind (see App::refresh); a header row starts each
     // group. Headers are drawn only: selection still counts titles, and the
     // highlighted row is mapped past the headers above it.
     let inner_w = LIST_W.saturating_sub(2) as usize;
     let mut items: Vec<ListItem> = Vec::new();
     let mut selected_row = 0;
+    let mut row_title: Vec<Option<usize>> = Vec::new(); // list row to title index, None for headers
     let mut last_kind: Option<String> = None;
     for (i, t) in app.visible().iter().enumerate() {
         if last_kind.as_deref() != Some(t.kind.as_str()) {
@@ -139,7 +155,9 @@ fn draw_list(f: &mut Frame, app: &App, area: Rect) {
                 Span::styled("─".repeat(fill), Style::default().fg(theme::LINE)),
             ])));
             last_kind = Some(t.kind.clone());
+            row_title.push(None);
         }
+        row_title.push(Some(i));
         if i == app.selected {
             selected_row = items.len();
         }
@@ -177,6 +195,14 @@ fn draw_list(f: &mut Frame, app: &App, area: Rect) {
         .highlight_style(Style::default().bg(theme::PANEL_HI).add_modifier(Modifier::BOLD));
     let mut st = ListState::default().with_selected(Some(selected_row));
     f.render_stateful_widget(list, area, &mut st);
+    app.hits.push((area, Hit::List));
+    let inner = Rect { x: area.x + 1, y: area.y + 1, width: area.width.saturating_sub(2), height: area.height.saturating_sub(2) };
+    for (k, row) in row_title.iter().enumerate().skip(st.offset()).take(inner.height as usize) {
+        if let Some(i) = row {
+            let y = inner.y + (k - st.offset()) as u16;
+            app.hits.push((Rect { x: inner.x, y, width: inner.width, height: 1 }, Hit::Row(*i)));
+        }
+    }
 }
 
 /// Rows the scrolling column may hold below the preview; pages are short.
@@ -199,6 +225,18 @@ fn draw_detail(f: &mut Frame, app: &mut App, t: &Title, area: Rect) {
 
     let mut text = Text::default();
     let page_y;
+    // button positions in the off-screen column: (x, y, width)
+    let mut button_at: Vec<(u16, u16, u16)> = Vec::new();
+    let place = |x0: u16, y: u16, line: &Line, out: &mut Vec<(u16, u16, u16)>| {
+        let mut x = x0;
+        for (k, span) in line.spans.iter().enumerate() {
+            let w = span.width() as u16;
+            if k % 2 == 0 {
+                out.push((x, y, w)); // even spans are buttons, odd ones the gaps
+            }
+            x += w;
+        }
+    };
     if side_by_side {
         // wide terminals: everything about the title beside the preview
         let mut lines = vec![
@@ -207,6 +245,7 @@ fn draw_detail(f: &mut Frame, app: &mut App, t: &Title, area: Rect) {
             Line::default(),
             buttons(app, t),
         ];
+        place(pw + 1, 3, &lines[3], &mut button_at);
         lines.extend(progress(app, t));
         lines.push(Line::default());
         lines.extend(facts(app, t));
@@ -216,6 +255,7 @@ fn draw_detail(f: &mut Frame, app: &mut App, t: &Title, area: Rect) {
         // title and buttons on one row, description under it, facts in the flow
         let b = buttons(app, t);
         let bw = b.width() as u16;
+        place(pw.saturating_sub(bw), ph, &b, &mut button_at);
         Paragraph::new(Span::styled(t.title.clone(), Style::default().fg(theme::TEXT_HI).add_modifier(Modifier::BOLD)))
             .render(Rect { x: 0, y: ph, width: pw.saturating_sub(bw + 1), height: 1 }, &mut buf);
         Paragraph::new(b).alignment(Alignment::Right).render(Rect { x: 0, y: ph, width: pw, height: 1 }, &mut buf);
@@ -251,6 +291,11 @@ fn draw_detail(f: &mut Frame, app: &mut App, t: &Title, area: Rect) {
     for y in 0..area.height.min(virt.height - top) {
         for x in 0..area.width {
             out[(area.x + x, area.y + y)] = buf[(x, top + y)].clone();
+        }
+    }
+    for (i, (x, y, w)) in button_at.into_iter().enumerate() {
+        if y >= top && y - top < area.height {
+            app.hits.push((Rect { x: area.x + x, y: area.y + y - top, width: w, height: 1 }, Hit::Button(i)));
         }
     }
     // say when there is more above or below

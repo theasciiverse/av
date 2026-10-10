@@ -13,7 +13,8 @@ mod ui;
 use std::time::Duration;
 
 use anyhow::Result;
-use ratatui::crossterm::event::{self, Event, KeyEventKind};
+use ratatui::crossterm::event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyEventKind};
+use ratatui::crossterm::execute;
 
 use app::App;
 
@@ -25,7 +26,9 @@ fn main() -> Result<()> {
 
     let mut app = App::new(paths, url);
     let mut terminal = ratatui::init();
+    let _ = execute!(std::io::stdout(), EnableMouseCapture);
     let res = run(&mut terminal, &mut app);
+    let _ = execute!(std::io::stdout(), DisableMouseCapture);
     ratatui::restore();
     res
 }
@@ -47,17 +50,27 @@ fn run(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> Result<()> {
     while !app.quit {
         app.tick();
         terminal.draw(|f| ui::draw(f, app))?;
-        if event::poll(Duration::from_millis(33))? {
-            if let Event::Key(k) = event::read()? {
-                if k.kind == KeyEventKind::Press {
-                    app.on_key(k);
-                }
+        // wait for input up to one frame, then take everything queued, so a
+        // fast wheel spin is handled at once instead of one notch per frame
+        let mut wait = Duration::from_millis(33);
+        while event::poll(wait)? {
+            match event::read()? {
+                Event::Key(k) if k.kind == KeyEventKind::Press => app.on_key(k),
+                Event::Mouse(m) => app.on_mouse(m),
+                _ => {}
             }
+            if app.launch.is_some() || app.quit {
+                break;
+            }
+            wait = Duration::ZERO;
         }
         if let Some(t) = app.launch.take() {
+            // the title gets a plain terminal; it turns on its own mouse mode if it wants one
+            let _ = execute!(std::io::stdout(), DisableMouseCapture);
             ratatui::restore();
             launch(app, &t);
             *terminal = ratatui::init();
+            let _ = execute!(std::io::stdout(), EnableMouseCapture);
             terminal.clear()?;
         }
         if last_snapshot.elapsed() > Duration::from_millis(500) {

@@ -5,7 +5,8 @@ use std::collections::{HashMap, HashSet};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::Instant;
 
-use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+use ratatui::layout::{Position, Rect};
 
 use crate::cast::{Cast, Player};
 use crate::catalog::{self, Title};
@@ -60,6 +61,18 @@ pub enum Status {
     Busy,
 }
 
+/// What a screen area does when clicked; ui::draw records these every frame.
+#[derive(Clone, Copy, Debug)]
+pub enum Hit {
+    /// a title row, by index into `visible()`
+    Row(usize),
+    Tab(View),
+    /// an action button, by index into `actions()`
+    Button(usize),
+    List,
+    Detail,
+}
+
 pub enum CastMsg {
     Loaded(String, Result<Cast, String>),
 }
@@ -84,6 +97,7 @@ pub struct App {
     /// set when a title should be launched; main suspends the TUI for it
     pub launch: Option<Title>,
     pub player: Option<(String, Player)>,
+    pub hits: Vec<(Rect, Hit)>,
     cast_loading: HashSet<String>,
     cast_failed: HashMap<String, String>,
     tx: Sender<Progress>,
@@ -117,6 +131,7 @@ impl App {
             quit: false,
             launch: None,
             player: None,
+            hits: Vec::new(),
             cast_loading: HashSet::new(),
             cast_failed: HashMap::new(),
             tx,
@@ -381,6 +396,52 @@ impl App {
                 Focus::Actions => self.actions_key(k),
                 Focus::Page => self.page_key(k),
             },
+        }
+    }
+
+    pub fn on_mouse(&mut self, m: MouseEvent) {
+        let pos = Position::new(m.column, m.row);
+        // later entries sit on top (buttons over the pane they are drawn in)
+        let hit = self.hits.iter().rev().find(|(r, _)| r.contains(pos)).map(|(_, h)| *h);
+        if !matches!(m.kind, MouseEventKind::Moved | MouseEventKind::Drag(_)) {
+            log::debug!("mouse {:?} at {},{} hit {hit:?}", m.kind, m.column, m.row);
+        }
+        if let Some(modal) = self.modal.take() {
+            // a click closes a note; other dialogs stay keyboard-driven
+            if !matches!(modal, Modal::Message(_)) || !matches!(m.kind, MouseEventKind::Down(_)) {
+                self.modal = Some(modal);
+            }
+            return;
+        }
+        match (m.kind, hit) {
+            (MouseEventKind::Down(MouseButton::Left), Some(Hit::Row(i))) => {
+                self.select(i);
+                self.focus = Focus::List;
+            }
+            (MouseEventKind::Down(MouseButton::Left), Some(Hit::Tab(v))) => {
+                self.view = v;
+                self.selected = 0;
+                self.page_scroll = 0;
+            }
+            (MouseEventKind::Down(MouseButton::Left), Some(Hit::Button(i))) => {
+                let Some(t) = self.current() else { return };
+                self.focus = Focus::Actions;
+                self.action = i;
+                if let Some((a, _, true)) = self.actions(&t).get(i).cloned() {
+                    self.run(a, &t);
+                }
+            }
+            (MouseEventKind::Down(MouseButton::Left), Some(Hit::Detail)) => self.focus = Focus::Page,
+            (MouseEventKind::ScrollDown, Some(Hit::Row(_) | Hit::List)) => {
+                let n = self.visible().len();
+                self.select((self.selected + 1).min(n.saturating_sub(1)));
+            }
+            (MouseEventKind::ScrollUp, Some(Hit::Row(_) | Hit::List)) => self.select(self.selected.saturating_sub(1)),
+            (MouseEventKind::ScrollDown, Some(Hit::Detail | Hit::Button(_))) => self.page_scroll += 3,
+            (MouseEventKind::ScrollUp, Some(Hit::Detail | Hit::Button(_))) => {
+                self.page_scroll = self.page_scroll.saturating_sub(3)
+            }
+            _ => {}
         }
     }
 
