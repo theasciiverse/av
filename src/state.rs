@@ -18,10 +18,19 @@ pub struct Installed {
     pub target: String,
 }
 
+/// Local play history per title, Steam-style; never leaves the machine.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Played {
+    pub last_played: String,
+    pub seconds: u64,
+    pub sessions: u32,
+}
+
 pub struct State {
     dir: PathBuf,
     pub installed: BTreeMap<String, Installed>,
     pub wishlist: BTreeSet<String>,
+    pub played: BTreeMap<String, Played>,
 }
 
 fn read<T: for<'de> Deserialize<'de> + Default>(path: &Path) -> T {
@@ -38,6 +47,7 @@ impl State {
             dir: dir.to_path_buf(),
             installed: installed.into_iter().map(|i| (i.id.clone(), i)).collect(),
             wishlist: read(&dir.join("wishlist.json")),
+            played: read(&dir.join("played.json")),
         }
     }
 
@@ -45,6 +55,7 @@ impl State {
         let list: Vec<&Installed> = self.installed.values().collect();
         write_atomic(&self.dir.join("installed.json"), &serde_json::to_string_pretty(&list)?)?;
         write_atomic(&self.dir.join("wishlist.json"), &serde_json::to_string_pretty(&self.wishlist)?)?;
+        write_atomic(&self.dir.join("played.json"), &serde_json::to_string_pretty(&self.played)?)?;
         Ok(())
     }
 }

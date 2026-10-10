@@ -419,6 +419,10 @@ fn facts(app: &App, t: &Title) -> Vec<Line<'static>> {
     if !t.license.is_empty() {
         lines.push(fact("License", t.license.clone()));
     }
+    if let Some(p) = app.state.played.get(&t.id) {
+        let last = p.last_played.get(..10).unwrap_or("");
+        lines.push(fact("Played", format!("{}, last on {last}", crate::launch::duration(p.seconds))));
+    }
     if let Some(m) = t.min_terminal {
         lines.push(fact("Needs", format!("{}x{} terminal{}", m.cols, m.rows, if t.requires.mouse { ", mouse" } else { "" })));
     }
@@ -475,6 +479,25 @@ fn draw_modal(f: &mut Frame, app: &App, m: &Modal, area: Rect) {
     let (title, body, w, h): (&str, Text, u16, u16) = match m {
         Modal::Quit => (" quit ", Text::from("Leave Asciiverse?\n\nEnter to quit, any other key to stay."), 44, 7),
         Modal::Message(s) => (" note ", Text::from(format!("{s}\n\nany key to close")), 72, 6 + s.lines().count() as u16 + s.len() as u16 / 66),
+        Modal::Choice { title, text, options, sel } => {
+            let mut lines: Vec<Line> = text.lines().map(|l| Line::from(l.to_string())).collect();
+            lines.push(Line::default());
+            let mut spans = Vec::new();
+            for (i, (label, _)) in options.iter().enumerate() {
+                let st = if i == *sel {
+                    Style::default().fg(theme::BG).bg(theme::GREEN_HI).add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(theme::GREEN_HI).bg(theme::PANEL)
+                };
+                spans.push(Span::styled(format!(" {label} "), st));
+                spans.push(Span::raw("  "));
+            }
+            lines.push(Line::from(spans));
+            lines.push(Line::default());
+            lines.push(Line::from(Span::styled("arrows choose, Enter confirms, Esc cancels", Style::default().fg(theme::FAINT))));
+            let h = 6 + text.lines().count() as u16 + text.len() as u16 / 60;
+            (title.as_str(), Text::from(lines), 64, h)
+        }
         Modal::Uninstall { id } => {
             let name = app.titles.iter().find(|t| t.id == *id).map(|t| t.title.clone()).unwrap_or(id.clone());
             let opt = |on: bool, s: &str| {

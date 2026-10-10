@@ -112,6 +112,7 @@ dependencies = [
  "directories",
  "env_logger",
  "flate2",
+ "libc",
  "log",
  "pulldown-cmark",
  "ratatui",

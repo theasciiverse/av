@@ -4,6 +4,7 @@ mod app;
 mod cast;
 mod catalog;
 mod install;
+mod launch;
 mod md;
 mod paths;
 mod state;
@@ -86,9 +87,11 @@ fn run(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> Result<()> {
 
 /// Run a title as a separate process in the same terminal; av never links it.
 fn launch(app: &mut App, t: &catalog::Title) {
-    let status = if let Some(c) = &t.connect {
+    let cmd = if let Some(c) = &t.connect {
         log::info!("connect {} {}:{}", t.id, c.host, c.port);
-        std::process::Command::new("telnet").arg(&c.host).arg(c.port.to_string()).status()
+        let mut cmd = std::process::Command::new("telnet");
+        cmd.arg(&c.host).arg(c.port.to_string());
+        cmd
     } else {
         let dir = app.paths.title_dir(&t.kind, &t.id);
         let Some(exe) = install::find_exec(&dir, &t.exec_name()) else {
@@ -96,15 +99,11 @@ fn launch(app: &mut App, t: &catalog::Title) {
             return;
         };
         log::info!("launch {} {}", t.id, exe.display());
-        std::process::Command::new(&exe).current_dir(&dir).status()
+        let mut cmd = std::process::Command::new(&exe);
+        cmd.current_dir(&dir);
+        cmd
     };
-    app.status = match status {
-        Ok(s) if s.success() => format!("back from {}", t.title),
-        Ok(s) => format!("{} exited with {s}", t.title),
-        Err(e) if t.connect.is_some() && e.kind() == std::io::ErrorKind::NotFound => {
-            "telnet is not installed; Lera will replace it".into()
-        }
-        Err(e) => format!("could not start {}: {e}", t.title),
-    };
-    log::info!("{}", app.status);
+    let log = app.paths.cache.join("logs").join(format!("{}.log", t.id));
+    let outcome = launch::run(cmd, Some(log));
+    app.finished(t, outcome);
 }

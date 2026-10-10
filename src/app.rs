@@ -51,6 +51,19 @@ pub enum Modal {
     Quit,
     Uninstall { id: String },
     Message(String),
+    /// a question with buttons, e.g. before launching
+    Choice { title: String, text: String, options: Vec<(String, Then)>, sel: usize },
+}
+
+/// What a Choice button does.
+#[derive(Clone, Debug)]
+pub enum Then {
+    Cancel,
+    /// go on with the launch checks; size_ok once the size warning was accepted
+    Play { id: String, size_ok: bool },
+    /// launch now, all checks done
+    Launch(String),
+    Install(String),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -535,7 +548,7 @@ impl App {
                 self.uninstall_keep_data = true;
                 self.modal = Some(Modal::Uninstall { id: t.id.clone() });
             }
-            Action::Play => self.launch = Some(t.clone()),
+            Action::Play => self.request_play(t, false),
             Action::Wishlist => {
                 if !self.state.wishlist.remove(&t.id) {
                     self.state.wishlist.insert(t.id.clone());
@@ -545,8 +558,121 @@ impl App {
         }
     }
 
+    /// Checks before launching: terminal size against the title's minimum,
+    /// then whether an update is waiting. Each asks; neither blocks.
+    fn request_play(&mut self, t: &Title, size_ok: bool) {
+        if !size_ok {
+            if let (Some(m), Ok((w, h))) = (t.min_terminal, ratatui::crossterm::terminal::size()) {
+                if w < m.cols || h < m.rows {
+                    self.modal = Some(Modal::Choice {
+                        title: " terminal size ".into(),
+                        text: format!(
+                            "{} needs a terminal of at least {}x{}. This one is {w}x{h}.\n\nEnlarge the window first, or play anyway.",
+                            t.title, m.cols, m.rows
+                        ),
+                        options: vec![("Cancel".into(), Then::Cancel), ("Play anyway".into(), Then::Play { id: t.id.clone(), size_ok: true })],
+                        sel: 0,
+                    });
+                    return;
+                }
+            }
+        }
+        if !t.is_mud() && self.status_of(t) == Status::Update {
+            let have = self.state.installed.get(&t.id).map(|i| i.version.clone()).unwrap_or_default();
+            self.modal = Some(Modal::Choice {
+                title: " update available ".into(),
+                text: format!("{} {} is out; you have {have}.", t.title, t.version),
+                options: vec![
+                    ("Update first".into(), Then::Install(t.id.clone())),
+                    (format!("Play {have}"), Then::Launch(t.id.clone())),
+                ],
+                sel: 0,
+            });
+            return;
+        }
+        self.launch = Some(t.clone());
+    }
+
+    fn choose(&mut self, then: Then) {
+        let find = |app: &App, id: &str| app.titles.iter().find(|t| t.id == id).cloned();
+        match then {
+            Then::Cancel => {}
+            Then::Play { id, size_ok } => {
+                if let Some(t) = find(self, &id) {
+                    self.request_play(&t, size_ok);
+                }
+            }
+            Then::Launch(id) => self.launch = find(self, &id),
+            Then::Install(id) => {
+                if let Some(t) = find(self, &id) {
+                    self.run(Action::Install, &t);
+                }
+            }
+        }
+    }
+
+    /// Back from a title: record play time, then say how it went.
+    pub fn finished(&mut self, t: &Title, o: crate::launch::Outcome) {
+        let p = self.state.played.entry(t.id.clone()).or_default();
+        p.seconds += o.seconds;
+        p.sessions += 1;
+        p.last_played = crate::state::now_rfc3339();
+        let sessions = p.sessions;
+        self.save();
+        let played = crate::launch::duration(o.seconds);
+        match &o.status {
+            Ok(st) => match crate::launch::failure(st) {
+                None => {
+                    self.status = format!("back from {}, played {played}", t.title);
+                    // now and then, not every time: point at the developer's own donation page
+                    if let Some(url) = &t.funding {
+                        if sessions % 5 == 0 {
+                            self.status += &format!(". Enjoying it? Support its developer: {url}");
+                        }
+                    }
+                }
+                Some(how) => {
+                    let mut text = format!("{} {how} after {played}.", t.title);
+                    if let Some(log) = &o.log {
+                        let tail = crate::launch::tail(log, 12);
+                        if !tail.is_empty() {
+                            text += &format!("\n\nLast lines it printed:\n\n{tail}");
+                        }
+                        text += &format!("\n\nFull log: {}", crate::paths::tilde(log));
+                    }
+                    self.status = format!("{} {how}", t.title);
+                    self.modal = Some(Modal::Message(text));
+                }
+            },
+            Err(e) if t.connect.is_some() && e.kind() == std::io::ErrorKind::NotFound => {
+                self.status = "telnet is not installed; Lera will replace it".into();
+            }
+            Err(e) => {
+                self.modal = Some(Modal::Message(format!("Could not start {}.\n\n{e}", t.title)));
+            }
+        }
+        log::info!("{}: {}", t.id, self.status);
+    }
+
     fn on_modal_key(&mut self, m: Modal, k: KeyEvent) {
         match m {
+            Modal::Choice { title, text, options, mut sel } => match k.code {
+                KeyCode::Left | KeyCode::Up | KeyCode::BackTab => {
+                    sel = sel.saturating_sub(1);
+                    self.modal = Some(Modal::Choice { title, text, options, sel });
+                }
+                KeyCode::Right | KeyCode::Down | KeyCode::Tab => {
+                    sel = (sel + 1).min(options.len().saturating_sub(1));
+                    self.modal = Some(Modal::Choice { title, text, options, sel });
+                }
+                KeyCode::Enter => {
+                    if let Some((_, then)) = options.get(sel).cloned() {
+                        self.choose(then);
+                    }
+                }
+                KeyCode::Esc => {}
+                _ => self.modal = Some(Modal::Choice { title, text, options, sel }),
+            },
             Modal::Quit => match k.code {
                 KeyCode::Enter | KeyCode::Char('y') => self.quit = true,
                 _ => {}
