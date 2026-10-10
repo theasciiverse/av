@@ -1,0 +1,260 @@
+# av
+
+The Asciiverse terminal client: browse the catalog, install, update and launch
+games, programs and movies, all from inside the terminal. It plays the Steam
+role to `hub`'s itch.io role: `hub` is the catalog and the website, `av` is
+the library and the launcher. Everything in the catalog reaches users through
+`av`.
+
+Status: design settled; first working cut built 2026-10-10 (catalog fetch
+and cache, list with views and filter, detail pane with the live `.cast`
+preview and page Markdown, install with sha256 check, uninstall, launch,
+wishlist, MUD connect via telnet). No downloads pane, intro, welcome screen
+or zip support yet. Local git repo only. This file is the canonical design.
+
+Run it against the website mockup's catalog (served on 127.0.0.1:8765 from
+`websites/Asciiverse`, whose `dev/build_catalog.py` packages locally built
+games as real archives):
+
+```bash
+AV_CATALOG_URL=http://127.0.0.1:8765/data/catalog.json RUST_LOG=av=debug cargo run --release
+# log: ~/.cache/asciiverse/av.log
+``` It
+consolidates the 2026-09-17 discussion (`../AVAndHubDesign.md`, kept as the
+record of how the decisions were reached) with the decisions of 2026-10-06.
+The catalog format, submission process and `.cast` recording spec live in
+`../hub/` because they are shared with the website and with outside
+developers.
+
+## Settled direction (2026-10-06)
+
+- **No server.** `av` reads a static `catalog.json` published by `hub` to
+  Cloudflare Pages. No accounts, no login, no backend. The July 2026
+  architecture (Axum server, Postgres, JWT accounts, Stripe, Fly.io) is
+  dropped.
+- **Launch is free, open-source titles, funded by donations.** Paid titles
+  are intended later (David, 2026-10-10); how they are sold and unlocked
+  without a server or accounts is not designed yet, so nothing in `av` or
+  the catalog should rule a price out. Which donation platform is still
+  open (see `../ORGandFunding.md`).
+- **Open to outside developers.** Anyone can be invited to add their game.
+  Titles can be open or closed source; `av` launches them the same way.
+- **`av` itself is open source.** It launches each title as a separate
+  process and never links its code, so its license does not reach the games
+  it serves. Precedent, checked 2026-10-06: Lutris and Heroic Games Launcher
+  (both GPL-3.0) launch closed Steam/Epic/GOG games, and itch.io's own app
+  (MIT) serves closed-source paid games. **Open:** MIT OR Apache-2.0 (the
+  Rust norm, maximum reuse) versus GPL-3.0 (forks of `av` stay open). Either
+  works for serving closed games.
+- **No terminal bundling or detection.** `av` and every title run in
+  whatever terminal is already open, on every OS including Windows.
+
+## Stack
+
+Rust + Ratatui, one binary crate, its own git repo (`theasciiverse/av`, not
+created yet). Dependencies chosen so far, versions checked on crates.io
+2026-10-06:
+
+| Need | Crate | Notes |
+|---|---|---|
+| Per-OS directories | `directories` 6.x (MIT OR Apache-2.0) | used directly, no wrapper |
+| `.cast` terminal emulation | `avt` 0.18 (Apache-2.0) | asciinema's own virtual terminal; `vt100` 0.16 (MIT) is the fallback |
+| `.cast` parsing | hand-written, `serde_json` | the `asciicast` crate (0.2.2) dates from 2018 and predates asciicast v3; the format is JSON lines, small enough to parse directly |
+| Intro logo | `artbox` 0.3 (MIT) | FIGlet-style text, built-in gradients, auto-scaling |
+| Logging | `log` + `env_logger` | per the session logging convention in `../CLAUDE.md` |
+| Page Markdown | `pulldown-cmark` 0.13 (MIT) | parses each title's `page`; `av` maps the allowed subset (`../hub/catalog/SCHEMA.md`) to Ratatui text |
+
+Still to pick: HTTP client, archive extraction (`tar` + `flate2`, `zip`),
+`sha2` for checksums. Nothing exotic is expected.
+
+## Catalog and updates
+
+- On launch `av` fetches `catalog.json` from `hub`, caches it with a short
+  TTL, and has a manual refresh key. The format is specified in
+  `../hub/catalog/SCHEMA.md`.
+- `av` refuses a `catalog.json` whose `schema_version` it does not know and
+  says so, rather than guessing.
+- `installed.json` records `{id, version, sha256, installed_at}` per
+  title. On refresh, a title whose catalog `version` differs is flagged
+  "update available", the same model apt and brew use.
+- **Updates are always started by the user, never silent.** An update
+  replaces the contents of the title's install directory, so a title's own
+  saves and config must live outside it.
+- **Every download is checked against the catalog's `sha256` before it is
+  extracted.** A mismatch aborts the install and says so. This is what makes
+  it safe to run binaries from outside developers: the checksum is pinned in
+  the reviewed catalog, so an asset swapped after review is rejected.
+- Archives: `tar.gz` on Linux and macOS, `.zip` on Windows, one per Rust
+  target triple. After extracting, `av` sets the executable bit explicitly
+  on Linux and macOS instead of trusting the archive.
+- `system_deps` in a manifest is a hint: `av` shows it as a warning, it does
+  not install system packages.
+
+## File layout
+
+Four buckets, named after the brand the way Steam names its folder
+(`~/.local/share/Steam`), not after the binary. Decided 2026-10-10. `av`
+takes the base folders from `directories::BaseDirs` and adds the name
+itself, because `ProjectDirs` would name the Linux folder `av`:
+
+| Bucket | Linux (XDG) | macOS | Windows | Contents |
+|---|---|---|---|---|
+| install | `~/.local/share/asciiverse/{games,programs,movies}/<id>/` | `~/Library/Application Support/Asciiverse/...` | `%LOCALAPPDATA%\Asciiverse\...` | installed titles; large, per machine, never roamed |
+| state | data dir: `installed.json`, `wishlist.json` | same | same (`data_local_dir`) | install state and wishlist |
+| cache | `~/.cache/asciiverse/` | `~/Library/Caches/Asciiverse/` | `%LOCALAPPDATA%\Asciiverse\cache\` | `catalog.json`, downloaded archives, `.cast` files, `av.log`; safe to delete |
+| config | `~/.config/asciiverse/` | `~/Library/Application Support/Asciiverse/` | `%APPDATA%\Asciiverse\` (roaming is fine) | `av`'s own preferences |
+
+Lowercase on Linux, where the XDG folders around it are lowercase; the
+brand's spelling on macOS and Windows. Unlike Steam, the cache stays in the
+platform's cache folder, so deleting it is always safe.
+
+- On Windows, install and state use `data_local_dir()` (`%LOCALAPPDATA%`),
+  never `data_dir()` (`%APPDATA%`, roaming): binaries and install state must
+  not sync through a roaming profile.
+- Append `.exe` when resolving `exec` on Windows. Keep ids strictly
+  lowercase and install paths shallow (legacy Windows `MAX_PATH`).
+- **PATH:** on Linux/macOS, installing symlinks the binary to
+  `~/.local/bin/<id>` (the `pipx` convention). On first run `av` checks
+  whether `~/.local/bin` is on `$PATH` and, if not, prints the exact line to
+  add. It never edits shell rc files itself.
+- Known gap, separate follow-up: `rusty-pinball` (`src/persist.rs`) and
+  `terminal-orbit` (`src/config.rs`, `src/save.rs`) hand-roll Linux/macOS-only
+  config paths with no Windows handling.
+
+## UI
+
+- **Layout:** menu row along the top, title list on the left, store-page
+  style detail pane on the right (preview area, description, tags, news,
+  developer info).
+- **One list, not separate Store and Library tabs.** A view switch above it
+  (full catalog / installed / wishlisted) and a type-to-filter search box
+  matching title and `topics`.
+- **List colors:** dark green = installed, dark red = update available,
+  white = not installed. The platform palette is green on black with amber
+  accents.
+- **Actions:** `[Install]`/`[Uninstall]` toggles by state, `[Play]` next to
+  it is grayed out until installed, wishlist toggle is a third separate
+  action. Uninstall asks for confirmation in an overlay, including an
+  explicit choice to keep or remove the title's save/config data. `av` needs
+  a general modal overlay primitive for this and for the exit prompt.
+- **Downloads pane:** one place for progress, retry after failure and the
+  queue, which also covers "update all".
+- **Keys:** arrow keys (no `hjkl` for now), `Tab` between panels, `Enter`
+  selects, `Esc` backs out one step at a time; `Esc` at the top level asks
+  before quitting.
+- **Offline:** works from the cached catalog, defaulting to the "installed"
+  view. Only installing and updating need a connection.
+- **Wishlist:** local only, `wishlist.json`, never synced.
+- **First run:** a welcome screen shown once (orientation, the PATH check),
+  reachable again from Help.
+- **Intro animation:** blank screen, then a horizontal line grows inward from
+  both edges with cycling colors, then "ASCIIVERSE" appears as large
+  ASCII-art text with a gradient rollover, then the welcome screen (first
+  run) or the library. `artbox` does the lettering; the line is hand-rolled.
+- **Supporting the project:** Help/About links to the Asciiverse donation
+  page. A title's own `funding` link, if its manifest has one, shows in its
+  detail pane (proposed, see `../hub/catalog/SCHEMA.md`).
+- No achievements, notes or trading-card-style extras to begin with.
+
+### Minimum terminal size
+
+`.cast` playback is cell for cell (text cannot be scaled), so the detail pane
+must fit the fixed **100x30** recording size plus its border, 102x32. The
+earlier estimate of **135x36** left out the title, description and buttons.
+**Target: 128x40** (David, 2026-10-10), built and checked in the first cut: a
+26-column list, the 102x32 preview with no frame around the pane, then one
+row with the title and buttons, one with the description, and the facts and
+page scrolling below. From about 163 columns the info moves beside the
+preview instead. Smaller terminals crop the preview and say so. Still to
+decide: a list-only fallback with the preview full screen on demand.
+
+## Detail pane content
+
+- **Page:** the title's `page` from `catalog.json` (its `<id>.md` in
+  `hub`), rendered from the Markdown subset in `../hub/catalog/SCHEMA.md`:
+  headings, paragraphs, lists, bold, italic, inline code, links. The
+  manifest's one-line `description` is used in the list and search.
+- **Preview:** one `.cast` per title, recorded to `../hub/RECORDING.md`.
+  `av` has its own player (no dependency on the `asciinema` CLI): parse
+  asciicast v2 and v3, feed output events into `avt`, draw the cell grid
+  with Ratatui. v3 is what asciinema 3.x writes by default.
+- **Still thumbnail** from the same file: replay up to the manifest's
+  `thumbnail_at` time into `avt` and draw that frame. No image protocol
+  needed.
+- **Palette:** `av` (and the website) play every cast with the Asciiverse
+  theme, ignoring any theme block in the recording, so all previews match.
+- **Font is on the viewer's side.** A cast stores characters, not pixels.
+  Titles using Braille or Unicode 16 block octants (`tty-rex`) only look
+  right in a terminal font that has those glyphs; `av`'s welcome screen
+  should mention this.
+- **News / patch notes:** from the title's release notes (GitHub Release
+  body when `release.source = "github"`) plus its `CHANGELOG` where present.
+- **Ratings:** none to begin with (no server). GitHub star or reaction counts
+  could be added at catalog build time later at no infrastructure cost.
+- Pixel-image rendering (`ratatui-image`, `mdfried`) is not needed; casts
+  replace screenshots.
+
+### asciinema: built in for playback, never shipped
+
+Decided 2026-10-06. Playback lives inside `av`; the asciinema CLI is not
+bundled, called or copied from.
+
+- **Why not run `asciinema play`:** it takes over the whole terminal and
+  writes to stdout, so it cannot draw inside a Ratatui pane or produce a
+  still frame. It also does not run on Windows (its README: "Windows is
+  currently not supported").
+- **Why `avt`:** it is asciinema's own terminal emulator, published
+  separately under Apache-2.0, and asciinema 3.2.1 depends on `avt 0.18`
+  itself. `av` interprets casts the same way the recorder does.
+- **What `av` writes itself:** the asciicast v2/v3 JSON-lines parser, a
+  timing loop honoring `idle_time_limit`, and the copy from `avt`'s cell grid
+  into a Ratatui buffer. All small.
+- **Licensing:** the asciinema CLI is GPL-3.0-or-later. Copying its code
+  into `av` would make `av` GPL; using `avt` as a library keeps both license
+  options open (Apache-2.0 is compatible with either).
+- **Recording catalog casts** is done by developers with their own
+  asciinema install, following `../hub/RECORDING.md`. `av` is not involved.
+
+## Roadmap, not the first pass
+
+- Recording your own `.cast` while playing (Steam F12 style), optionally
+  contributed back to the title's repo. The only case where `av` records.
+  Two routes, choose when it is built: call an installed asciinema as a
+  separate program (fine license-wise, Linux/macOS only, needs it
+  installed), or run the title in a pseudo-terminal inside `av` and write v3
+  lines itself (the file is trivial; the pseudo-terminal, especially on
+  Windows, is the real work; crates not researched yet).
+- "Write a review": a deep link to a pre-filled GitHub Discussions URL
+  (`.../discussions/new?category=...&title=...&body=...`), opened in the
+  browser, no auth in `av`. Posting directly from `av` via GitHub's OAuth
+  device flow would be `av`'s first authentication surface, so not default.
+- Multiple or movable library locations (`directories` already honors
+  `$XDG_DATA_HOME`).
+- Movie launching: the manifest field for movies is deferred until movie
+  playback itself is designed.
+
+## Open questions
+
+- `av`'s license (above).
+- **Hosting for `theasciiverse` titles.** All of the org's repos are private,
+  and GitHub release assets on private repos need authentication, so
+  `release.source = "github"` cannot work for them as things stand. Options:
+  make a title's repo public when it ships, publish its releases to a public
+  companion repo, or host archives elsewhere (Pages, R2) with
+  `release.source = "direct"`.
+- **Do outside developers' updates need review?** See
+  `../hub/CONTRIBUTING.md`.
+- **Titles whose minimum size exceeds 100x30.** None of the surveyed titles
+  do; see `../hub/RECORDING.md` for the rule if one ever does.
+
+## First build steps
+
+1. Write `../hub/catalog/solitty.toml` and `solitty.md` (both done) and
+   check every field the generated `catalog.json` needs is derivable from
+   them or from a release.
+2. Give `solitty` a `release.yml` that builds and uploads per-target archives
+   plus checksums; no title has one yet.
+3. Build `hub`'s catalog generator, producing `catalog.json` for one title.
+4. `av` skeleton: fetch and cache the catalog, list view, install with
+   checksum verification, launch. Session logging wired in from the start.
+5. Then the `.cast` player, detail pane, downloads pane, intro.

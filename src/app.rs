@@ -1,0 +1,523 @@
+//! App state and input. Arrow keys, Tab between panels, Enter selects, Esc
+//! backs out one step; Esc at the top level asks before quitting.
+
+use std::collections::{HashMap, HashSet};
+use std::sync::mpsc::{Receiver, Sender, channel};
+use std::time::Instant;
+
+use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+use crate::cast::{Cast, Player};
+use crate::catalog::{self, Title};
+use crate::install::{self, Progress};
+use crate::paths::Paths;
+use crate::state::State;
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum View {
+    All,
+    Installed,
+    Wishlist,
+}
+
+impl View {
+    pub const ALL: [View; 3] = [View::All, View::Installed, View::Wishlist];
+    pub fn label(self) -> &'static str {
+        match self {
+            View::All => "Catalog",
+            View::Installed => "Installed",
+            View::Wishlist => "Wishlist",
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Focus {
+    List,
+    Actions,
+    Page,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Action {
+    Install,
+    Uninstall,
+    Play,
+    Wishlist,
+}
+
+pub enum Modal {
+    Quit,
+    Uninstall { id: String },
+    Message(String),
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Status {
+    NotInstalled,
+    Installed,
+    Update,
+    Busy,
+}
+
+pub enum CastMsg {
+    Loaded(String, Result<Cast, String>),
+}
+
+pub struct App {
+    pub paths: Paths,
+    pub state: State,
+    pub titles: Vec<Title>,
+    pub catalog_url: String,
+    pub offline: bool,
+    pub view: View,
+    pub filter: String,
+    pub selected: usize,
+    pub focus: Focus,
+    pub action: usize,
+    pub page_scroll: u16,
+    pub modal: Option<Modal>,
+    pub uninstall_keep_data: bool,
+    pub status: String,
+    pub progress: HashMap<String, (u64, u64, String)>,
+    pub quit: bool,
+    /// set when a title should be launched; main suspends the TUI for it
+    pub launch: Option<Title>,
+    pub player: Option<(String, Player)>,
+    cast_loading: HashSet<String>,
+    cast_failed: HashMap<String, String>,
+    tx: Sender<Progress>,
+    rx: Receiver<Progress>,
+    cast_tx: Sender<CastMsg>,
+    cast_rx: Receiver<CastMsg>,
+    last_tick: Instant,
+}
+
+impl App {
+    pub fn new(paths: Paths, catalog_url: String) -> Self {
+        let state = State::load(&paths.state);
+        let (tx, rx) = channel();
+        let (cast_tx, cast_rx) = channel();
+        let mut app = App {
+            paths,
+            state,
+            titles: Vec::new(),
+            catalog_url,
+            offline: false,
+            view: View::All,
+            filter: String::new(),
+            selected: 0,
+            focus: Focus::List,
+            action: 0,
+            page_scroll: 0,
+            modal: None,
+            uninstall_keep_data: true,
+            status: String::new(),
+            progress: HashMap::new(),
+            quit: false,
+            launch: None,
+            player: None,
+            cast_loading: HashSet::new(),
+            cast_failed: HashMap::new(),
+            tx,
+            rx,
+            cast_tx,
+            cast_rx,
+            last_tick: Instant::now(),
+        };
+        app.refresh(false);
+        app
+    }
+
+    pub fn refresh(&mut self, force: bool) {
+        match catalog::load(&self.catalog_url, &self.paths.cache, force) {
+            Ok(l) => {
+                let mut titles: Vec<Title> = l.catalog.titles.into_values().collect();
+                // games first, then programs and movies, MUDs last; alphabetical within each
+                let rank = |k: &str| match k { "game" => 0, "program" => 1, "movie" => 2, "mud" => 3, _ => 4 };
+                titles.sort_by(|a, b| (rank(&a.kind), a.title.to_lowercase()).cmp(&(rank(&b.kind), b.title.to_lowercase())));
+                self.titles = titles;
+                self.offline = l.offline;
+                if l.offline {
+                    self.view = View::Installed;
+                    self.status = "offline: showing the cached catalog".into();
+                } else {
+                    self.status = format!("{} titles", self.titles.len());
+                }
+            }
+            Err(e) => {
+                log::error!("catalog: {e:#}");
+                self.status = format!("{e:#}");
+                self.modal = Some(Modal::Message(format!("Could not load the catalog.\n\n{e:#}")));
+            }
+        }
+        self.clamp();
+    }
+
+    pub fn visible(&self) -> Vec<&Title> {
+        let f = self.filter.to_lowercase();
+        self.titles
+            .iter()
+            .filter(|t| match self.view {
+                View::All => true,
+                View::Installed => self.state.installed.contains_key(&t.id),
+                View::Wishlist => self.state.wishlist.contains(&t.id),
+            })
+            .filter(|t| {
+                f.is_empty()
+                    || t.title.to_lowercase().contains(&f)
+                    || t.topics.iter().any(|x| x.to_lowercase().contains(&f))
+                    || t.genre.as_deref().is_some_and(|g| g.to_lowercase().contains(&f))
+            })
+            .collect()
+    }
+
+    pub fn current(&self) -> Option<Title> {
+        self.visible().get(self.selected).map(|t| (*t).clone())
+    }
+
+    pub fn status_of(&self, t: &Title) -> Status {
+        if self.progress.contains_key(&t.id) {
+            return Status::Busy;
+        }
+        match self.state.installed.get(&t.id) {
+            None => Status::NotInstalled,
+            Some(i) if !t.version.is_empty() && i.version != t.version => Status::Update,
+            Some(_) => Status::Installed,
+        }
+    }
+
+    pub fn actions(&self, t: &Title) -> Vec<(Action, String, bool)> {
+        let wish = if self.state.wishlist.contains(&t.id) { "♥ Wishlisted" } else { "♡ Wishlist" };
+        if t.is_mud() {
+            return vec![(Action::Play, "Connect".into(), true), (Action::Wishlist, wish.into(), true)];
+        }
+        let st = self.status_of(t);
+        let first = match st {
+            Status::NotInstalled => (Action::Install, "Install".into(), catalog::pick_platform(t).is_some()),
+            Status::Update => (Action::Install, "Update".into(), true),
+            Status::Busy => (Action::Install, "Installing…".into(), false),
+            Status::Installed => (Action::Uninstall, "Uninstall".into(), true),
+        };
+        let can_play = matches!(st, Status::Installed | Status::Update);
+        let mut v = vec![first, (Action::Play, "Play".into(), can_play), (Action::Wishlist, wish.into(), true)];
+        if st == Status::Update {
+            v.insert(2, (Action::Uninstall, "Uninstall".into(), true));
+        }
+        v
+    }
+
+    fn clamp(&mut self) {
+        let n = self.visible().len();
+        if self.selected >= n {
+            self.selected = n.saturating_sub(1);
+        }
+    }
+
+    fn select(&mut self, i: usize) {
+        if i != self.selected {
+            self.selected = i;
+            self.page_scroll = 0;
+            self.action = 0;
+        }
+    }
+
+    /// Called every frame: drain worker messages, advance the preview.
+    pub fn tick(&mut self) {
+        let dt = self.last_tick.elapsed().as_secs_f64();
+        self.last_tick = Instant::now();
+        while let Ok(p) = self.rx.try_recv() {
+            match p {
+                Progress::Bytes { id, done, total } => {
+                    let e = self.progress.entry(id).or_insert((0, 0, String::new()));
+                    e.0 = done;
+                    e.1 = total;
+                }
+                Progress::Status { id, msg } => {
+                    log::info!("{id}: {msg}");
+                    self.progress.entry(id).or_insert((0, 0, String::new())).2 = msg;
+                }
+                Progress::Done { id, installed } => {
+                    self.progress.remove(&id);
+                    self.status = format!("installed {id} {}", installed.version);
+                    if !self.paths.bin_on_path() {
+                        if let Some(b) = &self.paths.bin {
+                            // the welcome screen explains this once; here a reminder is enough
+                            self.status += &format!("; {} is not on your PATH, so start it from av", crate::paths::tilde(b));
+                        }
+                    }
+                    let current = self.current().is_some_and(|t| t.id == id);
+                    self.state.installed.insert(id, installed);
+                    self.save();
+                    if current {
+                        // the obvious next step after installing is playing
+                        if let Some(t) = self.current() {
+                            self.action = self.actions(&t).iter().position(|(a, ..)| *a == Action::Play).unwrap_or(0);
+                        }
+                    }
+                }
+                Progress::Failed { id, error } => {
+                    self.progress.remove(&id);
+                    self.status = format!("{id}: install failed");
+                    self.modal = Some(Modal::Message(format!("Installing {id} failed.\n\n{error}")));
+                }
+            }
+        }
+        while let Ok(CastMsg::Loaded(id, res)) = self.cast_rx.try_recv() {
+            self.cast_loading.remove(&id);
+            match res {
+                Ok(cast) => {
+                    log::debug!("cast {id}: {}x{}, {:.1}s", cast.cols, cast.rows, cast.duration);
+                    let at = self.titles.iter().find(|t| t.id == id).and_then(|t| t.thumbnail_at).unwrap_or(0.0);
+                    let mut p = Player::new(cast);
+                    p.seek((at - 3.0).max(0.0));
+                    if self.current().is_some_and(|t| t.id == id) {
+                        self.player = Some((id, p));
+                    }
+                }
+                Err(e) => {
+                    log::warn!("cast {id}: {e}");
+                    self.cast_failed.insert(id, e);
+                }
+            }
+        }
+        self.ensure_cast();
+        if let Some((_, p)) = &mut self.player {
+            p.tick(dt.min(0.25));
+        }
+    }
+
+    /// Load the selected title's cast in the background (cached on disk).
+    fn ensure_cast(&mut self) {
+        let Some(t) = self.current() else { return };
+        if self.player.as_ref().is_some_and(|(id, _)| *id == t.id) {
+            return;
+        }
+        self.player = None;
+        let Some(url) = &t.cast_url else { return };
+        if self.cast_loading.contains(&t.id) || self.cast_failed.contains_key(&t.id) {
+            return;
+        }
+        let url = catalog::resolve(&self.catalog_url, url);
+        // keyed by URL too: a re-recorded cast gets a new URL from the catalog
+        // build, and must not be shadowed by the old file in the cache
+        let file = self.paths.cache.join("casts").join(format!("{}-{:016x}.cast", t.id, fnv1a(&url)));
+        let (tx, id) = (self.cast_tx.clone(), t.id.clone());
+        std::thread::spawn(move || {
+            let res = (|| -> anyhow::Result<Cast> {
+                let src = match std::fs::read_to_string(&file) {
+                    Ok(s) => s,
+                    Err(_) => {
+                        let s = ureq::get(&url).call()?.body_mut().with_config().limit(256 << 20).read_to_string()?;
+                        std::fs::create_dir_all(file.parent().unwrap())?;
+                        std::fs::write(&file, &s)?;
+                        s
+                    }
+                };
+                Cast::parse(&src)
+            })();
+            let _ = tx.send(CastMsg::Loaded(id, res.map_err(|e| format!("{e:#}"))));
+        });
+        self.cast_loading.insert(t.id.clone());
+    }
+
+    /// None when there is nothing to show, else a placeholder message.
+    pub fn cast_note(&self, t: &Title) -> Option<String> {
+        if t.cast_url.is_none() {
+            Some("no preview recorded yet".into())
+        } else if let Some(e) = self.cast_failed.get(&t.id) {
+            Some(format!("preview unavailable: {e}"))
+        } else if self.cast_loading.contains(&t.id) {
+            Some("loading preview…".into())
+        } else {
+            None
+        }
+    }
+
+    fn save(&mut self) {
+        if let Err(e) = self.state.save() {
+            self.status = format!("could not save state: {e:#}");
+        }
+    }
+
+    pub fn on_key(&mut self, k: KeyEvent) {
+        log::debug!("key {:?} {:?} focus={:?} modal={}", k.code, k.modifiers, self.focus, self.modal.is_some());
+        if k.code == KeyCode::Char('c') && k.modifiers.contains(KeyModifiers::CONTROL) {
+            self.quit = true;
+            return;
+        }
+        if let Some(m) = self.modal.take() {
+            self.on_modal_key(m, k);
+            return;
+        }
+        match k.code {
+            KeyCode::Tab => {
+                self.focus = match self.focus {
+                    Focus::List => Focus::Actions,
+                    Focus::Actions => Focus::Page,
+                    Focus::Page => Focus::List,
+                };
+            }
+            KeyCode::BackTab => {
+                self.focus = match self.focus {
+                    Focus::List => Focus::Page,
+                    Focus::Actions => Focus::List,
+                    Focus::Page => Focus::Actions,
+                };
+            }
+            KeyCode::F(5) => self.refresh(true),
+            KeyCode::Esc => {
+                if self.focus != Focus::List {
+                    self.focus = Focus::List;
+                } else if !self.filter.is_empty() {
+                    self.filter.clear();
+                    self.clamp();
+                } else {
+                    self.modal = Some(Modal::Quit);
+                }
+            }
+            _ => match self.focus {
+                Focus::List => self.list_key(k),
+                Focus::Actions => self.actions_key(k),
+                Focus::Page => self.page_key(k),
+            },
+        }
+    }
+
+    fn list_key(&mut self, k: KeyEvent) {
+        let n = self.visible().len();
+        match k.code {
+            KeyCode::Up => self.select(self.selected.saturating_sub(1)),
+            KeyCode::Down => self.select((self.selected + 1).min(n.saturating_sub(1))),
+            KeyCode::PageUp => self.select(self.selected.saturating_sub(10)),
+            KeyCode::PageDown => self.select((self.selected + 10).min(n.saturating_sub(1))),
+            KeyCode::Home => self.select(0),
+            KeyCode::End => self.select(n.saturating_sub(1)),
+            KeyCode::Left | KeyCode::Right => {
+                let i = View::ALL.iter().position(|v| *v == self.view).unwrap_or(0) as i32;
+                let d = if k.code == KeyCode::Left { -1 } else { 1 };
+                self.view = View::ALL[(i + d).rem_euclid(3) as usize];
+                self.selected = 0;
+                self.page_scroll = 0;
+            }
+            KeyCode::Enter => {
+                self.focus = Focus::Actions;
+                self.action = 0;
+            }
+            KeyCode::Backspace => {
+                self.filter.pop();
+                self.selected = 0;
+            }
+            KeyCode::Char(c) if !k.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.filter.push(c);
+                self.selected = 0;
+            }
+            _ => {}
+        }
+    }
+
+    fn actions_key(&mut self, k: KeyEvent) {
+        let Some(t) = self.current() else { return };
+        let acts = self.actions(&t);
+        match k.code {
+            KeyCode::Left => self.action = self.action.saturating_sub(1),
+            KeyCode::Right => self.action = (self.action + 1).min(acts.len() - 1),
+            KeyCode::Up | KeyCode::Down => self.focus = Focus::List,
+            KeyCode::Enter => {
+                if let Some((a, _, enabled)) = acts.get(self.action) {
+                    if *enabled {
+                        self.run(*a, &t);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn page_key(&mut self, k: KeyEvent) {
+        match k.code {
+            KeyCode::Up => self.page_scroll = self.page_scroll.saturating_sub(1),
+            KeyCode::Down => self.page_scroll += 1,
+            KeyCode::PageUp => self.page_scroll = self.page_scroll.saturating_sub(10),
+            KeyCode::PageDown => self.page_scroll += 10,
+            KeyCode::Char(' ') => {
+                if let Some((_, p)) = &mut self.player {
+                    p.playing = !p.playing;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn run(&mut self, a: Action, t: &Title) {
+        log::info!("action {a:?} on {}", t.id);
+        match a {
+            Action::Install => {
+                install::spawn(
+                    install::Job {
+                        title: t.clone(),
+                        catalog_url: self.catalog_url.clone(),
+                        cache: self.paths.cache.clone(),
+                        dest: self.paths.title_dir(&t.kind, &t.id),
+                        bin: self.paths.bin.clone(),
+                    },
+                    self.tx.clone(),
+                );
+                self.progress.insert(t.id.clone(), (0, 0, "starting".into()));
+            }
+            Action::Uninstall => {
+                self.uninstall_keep_data = true;
+                self.modal = Some(Modal::Uninstall { id: t.id.clone() });
+            }
+            Action::Play => self.launch = Some(t.clone()),
+            Action::Wishlist => {
+                if !self.state.wishlist.remove(&t.id) {
+                    self.state.wishlist.insert(t.id.clone());
+                }
+                self.save();
+            }
+        }
+    }
+
+    fn on_modal_key(&mut self, m: Modal, k: KeyEvent) {
+        match m {
+            Modal::Quit => match k.code {
+                KeyCode::Enter | KeyCode::Char('y') => self.quit = true,
+                _ => {}
+            },
+            Modal::Message(_) => {}
+            Modal::Uninstall { id } => match k.code {
+                KeyCode::Left | KeyCode::Right | KeyCode::Up | KeyCode::Down => {
+                    self.uninstall_keep_data = !self.uninstall_keep_data;
+                    self.modal = Some(Modal::Uninstall { id });
+                }
+                KeyCode::Enter => {
+                    let Some(t) = self.titles.iter().find(|t| t.id == id).cloned() else { return };
+                    let dest = self.paths.title_dir(&t.kind, &t.id);
+                    match install::uninstall(&dest, self.paths.bin.as_deref(), &t.id) {
+                        Ok(()) => {
+                            self.state.installed.remove(&id);
+                            self.save();
+                            self.status = if self.uninstall_keep_data {
+                                format!("uninstalled {id}; its saves and settings were kept")
+                            } else {
+                                // titles keep their data in their own config/data dirs;
+                                // the manifest does not say where yet, so av cannot remove it
+                                format!("uninstalled {id}; removing save data is not supported yet, nothing else was deleted")
+                            };
+                            self.action = 0;
+                        }
+                        Err(e) => self.modal = Some(Modal::Message(format!("Uninstall failed.\n\n{e:#}"))),
+                    }
+                }
+                KeyCode::Esc => {}
+                _ => self.modal = Some(Modal::Uninstall { id }),
+            },
+        }
+    }
+}
+
+/// FNV-1a, enough to tell cache keys apart without another dependency.
+fn fnv1a(s: &str) -> u64 {
+    s.bytes().fold(0xcbf2_9ce4_8422_2325, |h, b| (h ^ b as u64).wrapping_mul(0x0100_0000_01b3))
+}
