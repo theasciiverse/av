@@ -117,7 +117,10 @@ pub fn host_targets() -> Vec<&'static str> {
         ("macos", "aarch64") => vec!["aarch64-apple-darwin", "x86_64-apple-darwin"],
         ("macos", "x86_64") => vec!["x86_64-apple-darwin"],
         ("windows", "x86_64") => vec!["x86_64-pc-windows-msvc", "x86_64-pc-windows-gnu"],
-        ("windows", "aarch64") => vec!["aarch64-pc-windows-msvc", "x86_64-pc-windows-msvc"],
+        // Windows 11 on ARM runs x86_64 programs under its built-in emulation
+        ("windows", "aarch64") => {
+            vec!["aarch64-pc-windows-msvc", "aarch64-pc-windows-gnu", "x86_64-pc-windows-msvc", "x86_64-pc-windows-gnu"]
+        }
         _ => vec![],
     }
 }
