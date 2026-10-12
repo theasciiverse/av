@@ -95,6 +95,11 @@ fn run(job: &Job, tx: &Sender<Progress>) -> Result<Installed> {
     }
     let exe = find_exec(&staging, &t.exec_name()).with_context(|| format!("{} not found in the archive", t.exec_name()))?;
     set_executable(&exe)?;
+    // an update keeps what the title wrote next to itself (saves, scores,
+    // config): anything in the old install that the new archive lacks
+    if job.dest.is_dir() {
+        carry_over(&job.dest, &staging).context("keep files from the previous install")?;
+    }
     let _ = std::fs::remove_dir_all(&job.dest);
     std::fs::rename(&staging, &job.dest)?;
     let exe = job.dest.join(exe.strip_prefix(&staging)?);
@@ -111,6 +116,26 @@ fn run(job: &Job, tx: &Sender<Progress>) -> Result<Installed> {
         kind: t.kind.clone(),
         target: target.into(),
     })
+}
+
+/// Move every file or folder under `old` that has no counterpart under `new`
+/// into `new`, keeping its relative path. Folders present in both are merged
+/// the same way; files present in both keep the new archive's copy. Both sit
+/// in the same parent folder, so these are renames, not copies. A file an
+/// older release shipped and a newer one dropped is carried over too: a stray
+/// file is harmless, a lost save is not.
+fn carry_over(old: &Path, new: &Path) -> Result<()> {
+    for entry in std::fs::read_dir(old)? {
+        let entry = entry?;
+        let (from, to) = (entry.path(), new.join(entry.file_name()));
+        let to_meta = std::fs::symlink_metadata(&to);
+        if entry.file_type()?.is_dir() && to_meta.as_ref().is_ok_and(|m| m.is_dir()) {
+            carry_over(&from, &to)?;
+        } else if to_meta.is_err() {
+            std::fs::rename(&from, &to)?;
+        }
+    }
+    Ok(())
 }
 
 /// The binary may sit at the top of the archive or inside one directory.
@@ -169,4 +194,37 @@ pub fn uninstall(dest: &Path, bin: Option<&Path>, id: &str) -> Result<()> {
 
 fn hex(b: &[u8]) -> String {
     b.iter().map(|x| format!("{x:02x}")).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::carry_over;
+    use std::fs;
+
+    #[test]
+    fn update_keeps_files_the_archive_does_not_have() {
+        let root = std::env::temp_dir().join(format!("av-carry-over-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let (old, new) = (root.join("old"), root.join("new"));
+        fs::create_dir_all(old.join("nki")).unwrap();
+        fs::create_dir_all(old.join("saves")).unwrap();
+        fs::write(old.join("game"), "old binary").unwrap();
+        fs::write(old.join("empire.sav"), "a save").unwrap();
+        fs::write(old.join("nki/vanilla.nki"), "old data").unwrap();
+        fs::write(old.join("nki/custom.nki"), "player's own").unwrap();
+        fs::write(old.join("saves/slot1"), "slot").unwrap();
+        fs::create_dir_all(new.join("nki")).unwrap();
+        fs::write(new.join("game"), "new binary").unwrap();
+        fs::write(new.join("nki/vanilla.nki"), "new data").unwrap();
+
+        carry_over(&old, &new).unwrap();
+
+        let read = |p: &str| fs::read_to_string(new.join(p)).unwrap();
+        assert_eq!(read("game"), "new binary");
+        assert_eq!(read("nki/vanilla.nki"), "new data");
+        assert_eq!(read("empire.sav"), "a save");
+        assert_eq!(read("nki/custom.nki"), "player's own");
+        assert_eq!(read("saves/slot1"), "slot");
+        let _ = fs::remove_dir_all(&root);
+    }
 }
