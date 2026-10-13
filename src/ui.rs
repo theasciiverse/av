@@ -432,6 +432,9 @@ fn facts(app: &App, t: &Title) -> Vec<Line<'static>> {
     if let Some(m) = t.min_terminal {
         lines.push(fact("Needs", format!("{}x{} terminal{}", m.cols, m.rows, if t.requires.mouse { ", mouse" } else { "" })));
     }
+    if t.requires.gamepad {
+        lines.push(fact("Gamepad", "supported".to_string()));
+    }
     if !t.requires.glyphs.is_empty() {
         lines.push(Line::from(Span::styled(
             format!("Font needs {} glyphs", t.requires.glyphs.join(", ")),

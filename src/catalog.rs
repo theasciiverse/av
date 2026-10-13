@@ -97,6 +97,7 @@ pub struct Requires {
     pub utf8: bool,
     pub color: String,
     pub mouse: bool,
+    pub gamepad: bool,
     pub glyphs: Vec<String>,
 }
 
