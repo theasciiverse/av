@@ -153,7 +153,7 @@ fn section_name(kind: &str) -> &'static str {
         "game" => "Games",
         "adventure" => "Text adventures",
         "program" => "Programs",
-        "demo" => "Demos",
+        "art" => "Art & Demos",
         "movie" => "Movies",
         "mud" => "MUDs",
         _ => "Other",
