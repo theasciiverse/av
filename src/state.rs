@@ -51,6 +51,15 @@ impl State {
         }
     }
 
+    /// Add a finished session to the title's play history; returns the session count.
+    pub fn record_play(&mut self, id: &str, seconds: u64) -> u32 {
+        let p = self.played.entry(id.to_string()).or_default();
+        p.seconds += seconds;
+        p.sessions += 1;
+        p.last_played = now_rfc3339();
+        p.sessions
+    }
+
     pub fn save(&self) -> Result<()> {
         let list: Vec<&Installed> = self.installed.values().collect();
         write_atomic(&self.dir.join("installed.json"), &serde_json::to_string_pretty(&list)?)?;

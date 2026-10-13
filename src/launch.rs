@@ -136,6 +136,46 @@ impl Drop for Guard {
     }
 }
 
+/// Lera, the Asciiverse MUD client: installed through av as a program,
+/// or anywhere on PATH.
+pub fn lera(paths: &crate::paths::Paths) -> Option<PathBuf> {
+    let name = if cfg!(windows) { "lera.exe" } else { "lera" };
+    crate::install::find_exec(&paths.title_dir("program", "lera"), name).or_else(|| {
+        let path = std::env::var_os("PATH")?;
+        std::env::split_paths(&path).map(|d| d.join(name)).find(|p| p.is_file())
+    })
+}
+
+/// The command that starts a title: its binary with the catalog's arguments,
+/// run from its install folder, or for a MUD, Lera (telnet as the fallback).
+/// The log is where the title's stderr goes.
+pub fn command(paths: &crate::paths::Paths, t: &crate::catalog::Title) -> Result<(Command, PathBuf), String> {
+    let cmd = if let Some(c) = &t.connect {
+        // Lera finds the world by id in the same cached catalog; telnet is the fallback
+        if let Some(lera) = lera(paths) {
+            log::info!("connect {} with {}", t.id, lera.display());
+            let mut cmd = Command::new(lera);
+            cmd.arg(&t.id);
+            cmd
+        } else {
+            log::info!("connect {} {}:{} with telnet", t.id, c.host, c.port);
+            let mut cmd = Command::new("telnet");
+            cmd.arg(&c.host).arg(c.port.to_string());
+            cmd
+        }
+    } else {
+        let dir = paths.title_dir(&t.kind, &t.id);
+        let Some(exe) = crate::install::find_exec(&dir, &t.exec_name()) else {
+            return Err(format!("{} is not installed correctly; reinstall it", t.title));
+        };
+        log::info!("launch {} {}", t.id, exe.display());
+        let mut cmd = Command::new(&exe);
+        cmd.args(&t.exec.args).current_dir(&dir);
+        cmd
+    };
+    Ok((cmd, paths.cache.join("logs").join(format!("{}.log", t.id))))
+}
+
 /// "23 min", "1 h 05 min", "40 s"
 pub fn duration(secs: u64) -> String {
     match secs {

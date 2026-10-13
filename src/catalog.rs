@@ -122,6 +122,18 @@ impl Title {
         if cfg!(windows) { format!("{base}.exe") } else { base }
     }
 
+    /// Whether a search (already lowercased) finds this title: name, topics,
+    /// genre, developer or description. An empty search finds everything.
+    pub fn matches(&self, f: &str) -> bool {
+        f.is_empty()
+            || self.title.to_lowercase().contains(f)
+            || self.id.contains(f)
+            || self.topics.iter().any(|x| x.to_lowercase().contains(f))
+            || self.genre.as_deref().is_some_and(|g| g.to_lowercase().contains(f))
+            || self.developer.as_ref().is_some_and(|d| d.name.to_lowercase().contains(f))
+            || self.description.to_lowercase().contains(f)
+    }
+
     pub fn is_mud(&self) -> bool {
         self.kind == "mud"
     }

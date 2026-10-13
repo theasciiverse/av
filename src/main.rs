@@ -3,6 +3,7 @@
 mod app;
 mod cast;
 mod catalog;
+mod cli;
 mod install;
 mod launch;
 mod md;
@@ -24,6 +25,14 @@ fn main() -> Result<()> {
     init_logging(&paths);
     let url = std::env::var("AV_CATALOG_URL").unwrap_or_else(|_| catalog::DEFAULT_CATALOG_URL.into());
     log::info!("av {} starting, catalog {url}", env!("CARGO_PKG_VERSION"));
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if !args.is_empty() {
+        if let Err(e) = cli::run(paths, url, args) {
+            eprintln!("av: {e:#}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
 
     let mut app = App::new(paths, url);
     let mut terminal = ratatui::init();
@@ -87,31 +96,11 @@ fn run(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> Result<()> {
 
 /// Run a title as a separate process in the same terminal; av never links it.
 fn launch(app: &mut App, t: &catalog::Title) {
-    let cmd = if let Some(c) = &t.connect {
-        // Lera finds the world by id in the same cached catalog; telnet is the fallback
-        if let Some(lera) = app.lera() {
-            log::info!("connect {} with {}", t.id, lera.display());
-            let mut cmd = std::process::Command::new(lera);
-            cmd.arg(&t.id);
-            cmd
-        } else {
-            log::info!("connect {} {}:{} with telnet", t.id, c.host, c.port);
-            let mut cmd = std::process::Command::new("telnet");
-            cmd.arg(&c.host).arg(c.port.to_string());
-            cmd
+    match launch::command(&app.paths, t) {
+        Ok((cmd, log)) => {
+            let outcome = launch::run(cmd, Some(log));
+            app.finished(t, outcome);
         }
-    } else {
-        let dir = app.paths.title_dir(&t.kind, &t.id);
-        let Some(exe) = install::find_exec(&dir, &t.exec_name()) else {
-            app.status = format!("{} is not installed correctly; reinstall it", t.title);
-            return;
-        };
-        log::info!("launch {} {}", t.id, exe.display());
-        let mut cmd = std::process::Command::new(&exe);
-        cmd.args(&t.exec.args).current_dir(&dir);
-        cmd
-    };
-    let log = app.paths.cache.join("logs").join(format!("{}.log", t.id));
-    let outcome = launch::run(cmd, Some(log));
-    app.finished(t, outcome);
+        Err(e) => app.status = e,
+    }
 }

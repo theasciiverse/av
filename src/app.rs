@@ -192,14 +192,7 @@ impl App {
                 View::Installed => self.state.installed.contains_key(&t.id),
                 View::Wishlist => self.state.wishlist.contains(&t.id),
             })
-            .filter(|t| {
-                f.is_empty()
-                    || t.title.to_lowercase().contains(&f)
-                    || t.topics.iter().any(|x| x.to_lowercase().contains(&f))
-                    || t.genre.as_deref().is_some_and(|g| g.to_lowercase().contains(&f))
-                    || t.developer.as_ref().is_some_and(|d| d.name.to_lowercase().contains(&f))
-                    || t.description.to_lowercase().contains(&f)
-            })
+            .filter(|t| t.matches(&f))
             .collect();
         if !f.is_empty() {
             // within each kind's group, titles whose name matches come first;
@@ -632,22 +625,12 @@ impl App {
     }
 
     /// Back from a title: record play time, then say how it went.
-    /// Lera, the Asciiverse MUD client: installed through av as a program,
-    /// or anywhere on PATH.
     pub fn lera(&self) -> Option<std::path::PathBuf> {
-        let name = if cfg!(windows) { "lera.exe" } else { "lera" };
-        crate::install::find_exec(&self.paths.title_dir("program", "lera"), name).or_else(|| {
-            let path = std::env::var_os("PATH")?;
-            std::env::split_paths(&path).map(|d| d.join(name)).find(|p| p.is_file())
-        })
+        crate::launch::lera(&self.paths)
     }
 
     pub fn finished(&mut self, t: &Title, o: crate::launch::Outcome) {
-        let p = self.state.played.entry(t.id.clone()).or_default();
-        p.seconds += o.seconds;
-        p.sessions += 1;
-        p.last_played = crate::state::now_rfc3339();
-        let sessions = p.sessions;
+        let sessions = self.state.record_play(&t.id, o.seconds);
         self.save();
         let played = crate::launch::duration(o.seconds);
         match &o.status {

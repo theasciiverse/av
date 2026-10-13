@@ -9,7 +9,8 @@ the library and the launcher. Everything in the catalog reaches users through
 Status: design settled; first working cut built 2026-10-10 (catalog fetch
 and cache, list with views and filter, detail pane with the live `.cast`
 preview and page Markdown, install with sha256 check, uninstall, launch,
-wishlist, MUD connect via telnet). No downloads pane, intro, welcome screen
+wishlist, MUD connect in Lera, with telnet as the fallback; shell commands
+with a download bar, 2026-10-13). No downloads pane, intro, welcome screen
 or zip support yet. Private repo: github.com/theasciiverse/av. This file is
 the canonical design.
 
@@ -92,6 +93,30 @@ Added in the first cut (2026-10-10): `ureq` 3.4 (HTTP, MIT OR Apache-2.0),
   on Linux and macOS instead of trusting the archive.
 - `system_deps` in a manifest is a hint: `av` shows it as a warning, it does
   not install system packages.
+
+## Commands
+
+Added 2026-10-13 (`src/cli.rs`). `av` alone opens the TUI; with arguments it
+runs one command and exits. The commands mirror the TUI's actions and share
+its code (catalog, `install::spawn`, `launch::command`, `State`), so the two
+cannot drift:
+
+```text
+av install <title>...     install, or update to the catalog's version
+av update [<title>...]    update these, or every title with an update
+av uninstall <title>...   remove; saves and settings are kept
+av play <title> [args]    start a title (extra args go after the catalog's), or connect to a MUD
+av list [installed|updates|wishlist]
+av search <words>
+av info <title>
+av help, av --version
+```
+
+A title is its id or its full name. Downloads draw a bar (green blocks with
+eighth-steps, percent, size, speed, time left), redrawn at most 15 times a
+second; without a terminal each step is one plain line, and colors are left
+out then or under `NO_COLOR`. `install.sh` and `install.ps1` on the website
+draw the same bar for av's own download. Exit code 1 on any failure.
 
 ## File layout
 
