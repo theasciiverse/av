@@ -151,7 +151,9 @@ fn draw_search(f: &mut Frame, app: &mut App, area: Rect) {
 fn section_name(kind: &str) -> &'static str {
     match kind {
         "game" => "Games",
+        "adventure" => "Text adventures",
         "program" => "Programs",
+        "demo" => "Demos",
         "movie" => "Movies",
         "mud" => "MUDs",
         _ => "Other",

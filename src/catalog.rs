@@ -18,6 +18,20 @@ pub struct Catalog {
     pub titles: BTreeMap<String, Title>,
 }
 
+/// Where a kind's group sits in the list: games first, then text adventures,
+/// programs, demos and movies, MUDs last
+pub fn kind_rank(kind: &str) -> u8 {
+    match kind {
+        "game" => 0,
+        "adventure" => 1,
+        "program" => 2,
+        "demo" => 3,
+        "movie" => 4,
+        "mud" => 5,
+        _ => 6,
+    }
+}
+
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
 pub struct Title {

@@ -162,8 +162,8 @@ impl App {
         match catalog::load(&self.catalog_url, &self.paths.cache, force) {
             Ok(l) => {
                 let mut titles: Vec<Title> = l.catalog.titles.into_values().collect();
-                // games first, then programs and movies, MUDs last; alphabetical within each
-                let rank = |k: &str| match k { "game" => 0, "program" => 1, "movie" => 2, "mud" => 3, _ => 4 };
+                // grouped by kind (catalog::kind_rank), alphabetical within each
+                let rank = catalog::kind_rank;
                 titles.sort_by(|a, b| (rank(&a.kind), a.title.to_lowercase()).cmp(&(rank(&b.kind), b.title.to_lowercase())));
                 self.titles = titles;
                 self.offline = l.offline;
@@ -204,10 +204,23 @@ impl App {
         if !f.is_empty() {
             // within each kind's group, titles whose name matches come first;
             // sort_by_key is stable, so the alphabetical order is kept inside
-            let rank = |k: &str| match k { "game" => 0, "program" => 1, "movie" => 2, "mud" => 3, _ => 4 };
+            let rank = catalog::kind_rank;
             v.sort_by_key(|t| (rank(&t.kind), !t.title.to_lowercase().contains(&f)));
         }
         v
+    }
+
+    /// After the search changes: the first title whose name matches, wherever
+    /// its kind's group sits, or the top of the list. Searching "tarts" lands
+    /// on tarts, not on a story whose description says "starts".
+    fn name_match(&self) -> usize {
+        let f = self.filter.to_lowercase();
+        let v = self.visible();
+        v.iter()
+            .position(|t| t.title.to_lowercase() == f)
+            .or_else(|| v.iter().position(|t| t.title.to_lowercase().starts_with(&f)))
+            .or_else(|| v.iter().position(|t| t.title.to_lowercase().contains(&f)))
+            .unwrap_or(0)
     }
 
     pub fn current(&self) -> Option<Title> {
@@ -492,11 +505,11 @@ impl App {
             }
             KeyCode::Backspace => {
                 self.filter.pop();
-                self.selected = 0;
+                self.selected = self.name_match();
             }
             KeyCode::Char(c) if !k.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.filter.push(c);
-                self.selected = 0;
+                self.selected = self.name_match();
             }
             _ => {}
         }
