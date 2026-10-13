@@ -449,15 +449,45 @@ fn facts(app: &App, t: &Title) -> Vec<Line<'static>> {
 }
 
 fn page_text(t: &Title) -> Text<'static> {
+    let mut text = Text::from(provenance(t));
     if !t.page.trim().is_empty() {
-        return md::render(&t.page);
+        text.lines.extend(md::render(&t.page).lines);
+        return text;
     }
     let mut lines = vec![Line::from(Span::styled(t.description.clone(), Style::default().fg(theme::TEXT)))];
     if !t.topics.is_empty() {
         lines.push(Line::default());
         lines.push(Line::from(Span::styled(t.topics.join("  ·  "), Style::default().fg(theme::FAINT))));
     }
-    Text::from(lines)
+    text.lines.extend(lines);
+    text
+}
+
+// Where it comes from, above the page: who made it, what we changed, and the links
+fn provenance(t: &Title) -> Vec<Line<'static>> {
+    if t.provenance.is_none() && t.upstream.is_none() {
+        return Vec::new();
+    }
+    let head = Style::default().fg(theme::DIM).add_modifier(Modifier::BOLD);
+    let mut lines = vec![Line::from(Span::styled("WHERE IT COMES FROM", head))];
+    if let Some(p) = &t.provenance {
+        lines.push(Line::from(Span::styled(p.clone(), Style::default().fg(theme::TEXT))));
+    }
+    let link = |k: &str, v: String| {
+        Line::from(vec![Span::styled(format!("{k:<13}"), Style::default().fg(theme::FAINT)), Span::styled(v, Style::default().fg(theme::GREEN))])
+    };
+    if let Some(u) = t.upstream.as_ref().filter(|u| !u.url.is_empty()) {
+        lines.push(link("Original", u.url.clone()));
+    }
+    if let Some(r) = &t.repo {
+        lines.push(link("Our source", format!("https://github.com/{r}")));
+        if let Some(c) = &t.changes {
+            let k = if c.contains("PATCHES") { "Our changes" } else { "Provenance" };
+            lines.push(link(k, format!("https://github.com/{r}/blob/HEAD/{c}")));
+        }
+    }
+    lines.push(Line::default());
+    lines
 }
 
 fn draw_foot(f: &mut Frame, app: &App, area: Rect) {

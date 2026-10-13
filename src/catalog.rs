@@ -32,6 +32,9 @@ pub struct Title {
     pub funding: Option<String>,
     pub developer: Option<Person>,
     pub upstream: Option<Person>,
+    // where it comes from and by whom, and the path in `repo` listing what Asciiverse changed
+    pub provenance: Option<String>,
+    pub changes: Option<String>,
     pub exec: Exec,
     pub min_terminal: Option<Size>,
     pub requires: Requires,
