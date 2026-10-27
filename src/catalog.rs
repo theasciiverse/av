@@ -219,6 +219,12 @@ fn parse(body: &str) -> Result<Catalog> {
     Ok(serde_json::from_str(body)?)
 }
 
+/// The cached catalog however old, without touching the network (for tab
+/// completion). None when there is no cache yet or it cannot be read.
+pub fn cached(cache_dir: &Path) -> Option<Catalog> {
+    parse(&std::fs::read_to_string(cache_dir.join("catalog.json")).ok()?).ok()
+}
+
 /// Fetch the catalog, using the cache when it is fresh and when offline.
 pub fn load(url: &str, cache_dir: &Path, force: bool) -> Result<Loaded> {
     let cache = cache_dir.join("catalog.json");

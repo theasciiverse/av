@@ -44,6 +44,7 @@ Usage:
                             list the catalog, or part of it
   av search <words>         find titles by name, topic, genre or developer
   av info <title>           show a title's details
+  av completions <shell>    print tab completion for bash, zsh, fish or powershell
   av help                   show this
   av --version              show av's version
 
@@ -76,6 +77,20 @@ pub fn run(paths: Paths, url: String, args: Vec<String>) -> Result<()> {
         }
         "-V" | "--version" | "version" => {
             println!("av {}", env!("CARGO_PKG_VERSION"));
+            return Ok(());
+        }
+        "completions" => {
+            let Some(shell) = rest.first() else {
+                bail!("usage: av completions <{}>", crate::complete::SHELLS.join("|"));
+            };
+            print!("{}", crate::complete::script(shell)?);
+            return Ok(());
+        }
+        // what a completion script asks on every Tab; not in the help
+        "__complete" => {
+            for c in crate::complete::candidates(rest, &crate::complete::Known::load(&paths)) {
+                println!("{c}");
+            }
             return Ok(());
         }
         _ => {}

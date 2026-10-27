@@ -4,6 +4,7 @@ mod app;
 mod cast;
 mod catalog;
 mod cli;
+mod complete;
 mod install;
 mod launch;
 mod md;

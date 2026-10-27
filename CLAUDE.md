@@ -132,6 +132,7 @@ av play <title> [args]    start a title (extra args go after the catalog's), or 
 av list [installed|updates|wishlist]
 av search <words>
 av info <title>
+av completions <bash|zsh|fish|powershell>
 av help, av --version
 ```
 
@@ -140,6 +141,15 @@ eighth-steps, percent, size, speed, time left), redrawn at most 15 times a
 second; without a terminal each step is one plain line, and colors are left
 out then or under `NO_COLOR`. `install.sh` and `install.ps1` on the website
 draw the same bar for av's own download. Exit code 1 on any failure.
+
+Tab completion (2026-10-27, `src/complete.rs`): `av completions <shell>`
+prints a small script that calls the hidden `av __complete <words so far>`
+on every Tab. All the logic is in Rust and unit-tested; the scripts only
+filter by the word being typed. It reads the cached `catalog.json` and
+`installed.json`, never the network. Checked in bash and zsh here and in
+fish 4.0 and PowerShell 7 in containers. Nothing installs it automatically,
+because `av` never edits shell startup files; the README has the line per
+shell.
 
 ## File layout
 

@@ -48,6 +48,28 @@ av info <title>           show a title's details
 
 A title is its id (`av install solitty`) or its full name.
 
+### Tab completion
+
+`av completions <shell>` prints completion for commands and title ids:
+`av install` offers the whole catalog, `av play` what is installed plus the
+MUDs. It answers from the cached catalog, so it is instant and works
+offline. Add the line for your shell:
+
+| Shell | Where | Line |
+|---|---|---|
+| bash | `~/.bashrc` | `eval "$(av completions bash)"` |
+| zsh | `~/.zshrc`, after `compinit` | `source <(av completions zsh)` |
+| fish | run once | `av completions fish > ~/.config/fish/completions/av.fish` |
+| PowerShell | `$PROFILE` | `av completions powershell \| Out-String \| Invoke-Expression` |
+
+In the catalog: arrow keys move, `Tab` switches between the list and the
+detail pane, `Enter` selects, typing filters, and `Esc` backs out one step
+at a time.
+
+The terminal should be at least 128x40 to show a title's preview in full;
+smaller terminals crop it. Some titles draw with Braille or Unicode block
+characters and need a font that has them.
+
 ## How it works
 
 There is no server and no account. `av` reads a static `catalog.json` that
