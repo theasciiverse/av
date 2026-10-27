@@ -187,9 +187,15 @@ platform's cache folder, so deleting it is always safe.
 - **Layout:** menu row along the top, title list on the left, store-page
   style detail pane on the right (preview area, description, tags, news,
   developer info).
-- **One list, not separate Store and Library tabs.** A view switch above it
-  (full catalog / installed / wishlisted) and a type-to-filter search box
-  matching title and `topics`.
+- **One list, not separate Store and Library tabs.** A type-to-filter
+  search box matching title and `topics`, and under it the **show card**
+  (David, 2026-10-27; it replaced the Catalog / Installed / Wishlist view
+  tabs): folded, one line saying what the list shows; opened (↑ from the
+  top of the list, or a click), a box per kind with its count, then
+  "only mine" boxes for Installed and Wishlisted (both ticked: installed
+  or wishlisted). Kinds combine freely. It is kept in the config bucket as
+  `show.json`, storing the kinds switched off so a kind new to the catalog
+  shows up. Offline, Installed is ticked for that run only.
 - **List colors:** dark green = installed, dark red = update available,
   white = not installed. The platform palette is green on black with amber
   accents.

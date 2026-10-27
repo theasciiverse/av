@@ -1,7 +1,8 @@
 //! App state and input. Arrow keys, Tab between panels, Enter selects, Esc
 //! backs out one step; Esc at the top level asks before quitting.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
+use std::path::Path;
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::Instant;
 
@@ -10,30 +11,59 @@ use ratatui::layout::{Position, Rect};
 
 use crate::cast::{Cast, Player};
 use crate::catalog::{self, Title};
+use serde::{Deserialize, Serialize};
 use crate::install::{self, Progress};
 use crate::paths::Paths;
 use crate::state::State;
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum View {
+/// What the list shows, set in the card under the search box and kept in
+/// the config dir. It stores the kinds switched off, so a kind that is new
+/// to the catalog shows up. `installed` and `wishlist` narrow the list to
+/// the player's own titles: either one, or both together (installed or
+/// wishlisted).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Show {
+    pub hidden: BTreeSet<String>,
+    pub installed: bool,
+    pub wishlist: bool,
+}
+
+impl Show {
+    fn file(config: &Path) -> std::path::PathBuf {
+        config.join("show.json")
+    }
+
+    pub fn load(config: &Path) -> Show {
+        crate::state::read(&Show::file(config))
+    }
+
+    fn save(&self, config: &Path) -> anyhow::Result<()> {
+        std::fs::create_dir_all(config)?;
+        crate::state::write_atomic(&Show::file(config), &serde_json::to_string_pretty(self)?)
+    }
+
+    pub fn lets_through(&self, t: &Title, state: &State) -> bool {
+        !self.hidden.contains(&t.kind)
+            && (!(self.installed || self.wishlist)
+                || (self.installed && state.installed.contains_key(&t.id))
+                || (self.wishlist && state.wishlist.contains(&t.id)))
+    }
+}
+
+/// A line in the show card.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum ShowRow {
     All,
+    Kind(String),
     Installed,
     Wishlist,
 }
 
-impl View {
-    pub const ALL: [View; 3] = [View::All, View::Installed, View::Wishlist];
-    pub fn label(self) -> &'static str {
-        match self {
-            View::All => "Catalog",
-            View::Installed => "Installed",
-            View::Wishlist => "Wishlist",
-        }
-    }
-}
-
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Focus {
+    /// the show card, open
+    Show,
     List,
     Actions,
     Page,
@@ -79,7 +109,10 @@ pub enum Status {
 pub enum Hit {
     /// a title row, by index into `visible()`
     Row(usize),
-    Tab(View),
+    /// the show card's folded line, which opens and closes it
+    ShowHead,
+    /// a line in the open show card, by index into `show_rows()`
+    ShowRow(usize),
     /// an action button, by index into `actions()`
     Button(usize),
     List,
@@ -98,7 +131,9 @@ pub struct App {
     pub collections: catalog::Collections,
     pub catalog_url: String,
     pub offline: bool,
-    pub view: View,
+    pub show: Show,
+    /// the highlighted line in the open show card
+    pub show_row: usize,
     pub filter: String,
     pub selected: usize,
     pub focus: Focus,
@@ -125,6 +160,7 @@ pub struct App {
 impl App {
     pub fn new(paths: Paths, catalog_url: String) -> Self {
         let state = State::load(&paths.state);
+        let show = Show::load(&paths.config);
         let (tx, rx) = channel();
         let (cast_tx, cast_rx) = channel();
         let mut app = App {
@@ -134,7 +170,8 @@ impl App {
             collections: Default::default(),
             catalog_url,
             offline: false,
-            view: View::All,
+            show,
+            show_row: 0,
             filter: String::new(),
             selected: 0,
             focus: Focus::List,
@@ -171,7 +208,8 @@ impl App {
                 self.collections = l.catalog.collections;
                 self.offline = l.offline;
                 if l.offline {
-                    self.view = View::Installed;
+                    // for this run only: show.json keeps the player's own choice
+                    self.show.installed = true;
                     self.status = "offline: showing the cached catalog".into();
                 } else {
                     self.status = format!("{} titles", self.titles.len());
@@ -190,11 +228,7 @@ impl App {
         let f = self.filter.to_lowercase();
         let mut v: Vec<&Title> = self.titles
             .iter()
-            .filter(|t| match self.view {
-                View::All => true,
-                View::Installed => self.state.installed.contains_key(&t.id),
-                View::Wishlist => self.state.wishlist.contains(&t.id),
-            })
+            .filter(|t| self.show.lets_through(t, &self.state))
             .filter(|t| t.matches(&f, &self.collections))
             .collect();
         if !f.is_empty() {
@@ -252,6 +286,74 @@ impl App {
             v.insert(2, (Action::Uninstall, "Uninstall".into(), true));
         }
         v
+    }
+
+    /// The show card's lines: All, each kind the catalog has (in list order),
+    /// then the two that narrow to the player's own titles.
+    pub fn show_rows(&self) -> Vec<ShowRow> {
+        let mut kinds: Vec<&str> = Vec::new();
+        for t in &self.titles {
+            if kinds.last() != Some(&t.kind.as_str()) && !kinds.contains(&t.kind.as_str()) {
+                kinds.push(&t.kind);
+            }
+        }
+        let mut rows = vec![ShowRow::All];
+        rows.extend(kinds.into_iter().map(|k| ShowRow::Kind(k.to_string())));
+        rows.extend([ShowRow::Installed, ShowRow::Wishlist]);
+        rows
+    }
+
+    pub fn row_on(&self, r: &ShowRow) -> bool {
+        match r {
+            ShowRow::All => self.show.hidden.is_empty(),
+            ShowRow::Kind(k) => !self.show.hidden.contains(k),
+            ShowRow::Installed => self.show.installed,
+            ShowRow::Wishlist => self.show.wishlist,
+        }
+    }
+
+    /// Switch a show card line; the highlighted title stays selected when it
+    /// is still in the list.
+    fn toggle_show(&mut self, i: usize) {
+        let Some(r) = self.show_rows().get(i).cloned() else { return };
+        let keep = self.current().map(|t| t.id);
+        match &r {
+            // all on, or when they already are, all off
+            ShowRow::All if self.show.hidden.is_empty() => {
+                self.show.hidden = self.titles.iter().map(|t| t.kind.clone()).collect();
+            }
+            ShowRow::All => self.show.hidden.clear(),
+            ShowRow::Kind(k) => {
+                if !self.show.hidden.remove(k) {
+                    self.show.hidden.insert(k.clone());
+                }
+            }
+            ShowRow::Installed => self.show.installed = !self.show.installed,
+            ShowRow::Wishlist => self.show.wishlist = !self.show.wishlist,
+        }
+        log::info!("show {r:?} -> {:?}", self.show);
+        if let Err(e) = self.show.save(&self.paths.config) {
+            self.status = format!("could not save what to show: {e:#}");
+        }
+        self.selected = keep.and_then(|id| self.visible().iter().position(|t| t.id == id)).unwrap_or(0);
+        self.page_scroll = 0;
+        self.action = 0;
+    }
+
+    fn show_key(&mut self, k: KeyEvent) {
+        let n = self.show_rows().len();
+        match k.code {
+            KeyCode::Up => self.show_row = self.show_row.saturating_sub(1),
+            KeyCode::Down if self.show_row + 1 >= n => self.focus = Focus::List,
+            KeyCode::Down => self.show_row += 1,
+            KeyCode::Char(' ') | KeyCode::Enter => self.toggle_show(self.show_row),
+            // typing searches, as it does from the list
+            KeyCode::Char(_) | KeyCode::Backspace => {
+                self.focus = Focus::List;
+                self.list_key(k);
+            }
+            _ => {}
+        }
     }
 
     fn clamp(&mut self) {
@@ -400,14 +502,14 @@ impl App {
         match k.code {
             KeyCode::Tab => {
                 self.focus = match self.focus {
-                    Focus::List => Focus::Actions,
+                    Focus::Show | Focus::List => Focus::Actions,
                     Focus::Actions => Focus::Page,
                     Focus::Page => Focus::List,
                 };
             }
             KeyCode::BackTab => {
                 self.focus = match self.focus {
-                    Focus::List => Focus::Page,
+                    Focus::Show | Focus::List => Focus::Page,
                     Focus::Actions => Focus::List,
                     Focus::Page => Focus::Actions,
                 };
@@ -424,6 +526,7 @@ impl App {
                 }
             }
             _ => match self.focus {
+                Focus::Show => self.show_key(k),
                 Focus::List => self.list_key(k),
                 Focus::Actions => self.actions_key(k),
                 Focus::Page => self.page_key(k),
@@ -450,10 +553,13 @@ impl App {
                 self.select(i);
                 self.focus = Focus::List;
             }
-            (MouseEventKind::Down(MouseButton::Left), Some(Hit::Tab(v))) => {
-                self.view = v;
-                self.selected = 0;
-                self.page_scroll = 0;
+            (MouseEventKind::Down(MouseButton::Left), Some(Hit::ShowHead)) => {
+                self.focus = if self.focus == Focus::Show { Focus::List } else { Focus::Show };
+            }
+            (MouseEventKind::Down(MouseButton::Left), Some(Hit::ShowRow(i))) => {
+                self.focus = Focus::Show;
+                self.show_row = i;
+                self.toggle_show(i);
             }
             (MouseEventKind::Down(MouseButton::Left), Some(Hit::Button(i))) => {
                 let Some(t) = self.current() else { return };
@@ -482,19 +588,17 @@ impl App {
     fn list_key(&mut self, k: KeyEvent) {
         let n = self.visible().len();
         match k.code {
-            KeyCode::Up => self.select(self.selected.saturating_sub(1)),
+            // up from the top opens the show card above the list
+            KeyCode::Up if self.selected == 0 => {
+                self.focus = Focus::Show;
+                self.show_row = 0;
+            }
+            KeyCode::Up => self.select(self.selected - 1),
             KeyCode::Down => self.select((self.selected + 1).min(n.saturating_sub(1))),
             KeyCode::PageUp => self.select(self.selected.saturating_sub(10)),
             KeyCode::PageDown => self.select((self.selected + 10).min(n.saturating_sub(1))),
             KeyCode::Home => self.select(0),
             KeyCode::End => self.select(n.saturating_sub(1)),
-            KeyCode::Left | KeyCode::Right => {
-                let i = View::ALL.iter().position(|v| *v == self.view).unwrap_or(0) as i32;
-                let d = if k.code == KeyCode::Left { -1 } else { 1 };
-                self.view = View::ALL[(i + d).rem_euclid(3) as usize];
-                self.selected = 0;
-                self.page_scroll = 0;
-            }
             KeyCode::Enter => {
                 self.focus = Focus::Actions;
                 self.action = 0;

@@ -8,7 +8,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, List, ListItem, ListState, Paragraph, Widget, Wrap};
 
-use crate::app::{App, Focus, Hit, Modal, Status, View};
+use crate::app::{App, Focus, Hit, Modal, ShowRow, Status};
 use crate::catalog::Title;
 use crate::{md, theme};
 
@@ -22,20 +22,25 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     let [head, body, foot] = Layout::vertical([Constraint::Length(2), Constraint::Min(5), Constraint::Length(1)]).areas(area);
     draw_header(f, app, head);
     let [list, detail] = Layout::horizontal([Constraint::Length(LIST_W), Constraint::Min(20)]).areas(body);
-    let [search, list] = Layout::vertical([Constraint::Length(3), Constraint::Min(3)]).areas(list);
+    let card_h = if app.focus == Focus::Show { app.show_rows().len() as u16 + 4 } else { 3 };
+    let [search, card, list] = Layout::vertical([Constraint::Length(3), Constraint::Length(card_h), Constraint::Min(3)]).areas(list);
     draw_search(f, app, search);
+    draw_show(f, app, card);
     draw_list(f, app, list);
     app.hits.push((detail, Hit::Detail));
     match app.current() {
         Some(t) => draw_detail(f, app, &t, detail),
         None => {
-            let msg = match app.view {
-                View::Installed => "Nothing installed yet. Press → to see the whole catalog.",
-                View::Wishlist => "Your wishlist is empty.",
-                View::All if !app.filter.is_empty() => "Nothing matches the search. Esc clears it.",
-                View::All => "The catalog is empty.",
+            let msg = if app.titles.is_empty() {
+                "The catalog is empty."
+            } else if !app.filter.is_empty() {
+                "Nothing matches the search. Esc clears it."
+            } else if app.show.installed || app.show.wishlist {
+                "None of your titles are in the groups shown. Change what to show in the card above the list (↑ from its top)."
+            } else {
+                "No groups are switched on. Pick some in the card above the list (↑ from its top)."
             };
-            f.render_widget(Paragraph::new(msg).style(Style::default().fg(theme::DIM)).block(pane(false, "")), detail);
+            f.render_widget(Paragraph::new(msg).wrap(Wrap { trim: true }).style(Style::default().fg(theme::DIM)).block(pane(false, "")), detail);
         }
     }
     draw_foot(f, app, foot);
@@ -87,7 +92,7 @@ fn draw_header(f: &mut Frame, app: &mut App, area: Rect) {
         f.render_widget(Paragraph::new(Line::from(spans)), Rect { x: x0, y: area.y + row, width: total.min(area.width), height: 1 });
     }
 
-    // right: catalog state on top, views and filter below, right-aligned
+    // right: catalog state, and how much of it the list shows
     let rx = x0 + total + 3;
     let rw = (area.x + area.width).saturating_sub(rx + 1);
     let info = if app.offline {
@@ -96,29 +101,10 @@ fn draw_header(f: &mut Frame, app: &mut App, area: Rect) {
         Span::styled(format!("{} titles", app.titles.len()), Style::default().fg(theme::FAINT))
     };
     f.render_widget(Paragraph::new(Line::from(info)).alignment(Alignment::Right), Rect { x: rx, y: area.y, width: rw, height: 1 });
-
-    let mut spans = Vec::new();
-    let mut tabs = Vec::new(); // (offset, width, view) for mouse hits
-    let mut off = 0u16;
-    for v in View::ALL {
-        let on = v == app.view;
-        let st = if on {
-            Style::default().fg(theme::BG).bg(theme::GREEN).add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(theme::DIM)
-        };
-        let label = format!(" {} ", v.label());
-        tabs.push((off, label.chars().count() as u16, v));
-        off += label.chars().count() as u16 + 1;
-        spans.push(Span::styled(label, st));
-        spans.push(Span::raw(" "));
-    }
-    let line = Line::from(spans);
-    let lw_total = (line.width() as u16).min(rw);
-    let lx = rx + rw - lw_total;
-    f.render_widget(Paragraph::new(line), Rect { x: lx, y: area.y + 1, width: lw_total, height: 1 });
-    for (o, w, v) in tabs {
-        app.hits.push((Rect { x: lx + o, y: area.y + 1, width: w, height: 1 }, Hit::Tab(v)));
+    let shown = app.visible().len();
+    if shown != app.titles.len() {
+        let line = Line::from(Span::styled(format!("showing {shown}"), Style::default().fg(theme::DIM)));
+        f.render_widget(Paragraph::new(line).alignment(Alignment::Right), Rect { x: rx, y: area.y + 1, width: rw, height: 1 });
     }
 }
 
@@ -146,6 +132,94 @@ fn draw_search(f: &mut Frame, app: &mut App, area: Rect) {
     }
     f.render_widget(Paragraph::new(Line::from(spans)).block(block), area);
     app.hits.push((area, Hit::Search));
+}
+
+/// The card under the search box: folded, one line saying what the list
+/// shows; open, a box per kind and two that narrow to the player's titles.
+fn draw_show(f: &mut Frame, app: &mut App, area: Rect) {
+    let open = app.focus == Focus::Show;
+    let rows = app.show_rows();
+    let mut lines = Vec::new();
+    let w = area.width.saturating_sub(2) as usize;
+    let caret = if open { "▾ " } else { "▸ " };
+    lines.push(Line::from(vec![
+        Span::styled(caret, Style::default().fg(theme::GREEN)),
+        Span::styled(show_summary(app, &rows, w - 2), Style::default().fg(if open { theme::TEXT_HI } else { theme::TEXT })),
+    ]));
+    if open {
+        for (i, r) in rows.iter().enumerate() {
+            if *r == ShowRow::Installed {
+                let label = "─ only mine ";
+                lines.push(Line::from(vec![
+                    Span::styled(label, Style::default().fg(theme::FAINT)),
+                    Span::styled("─".repeat(w.saturating_sub(label.chars().count())), Style::default().fg(theme::LINE)),
+                ]));
+            }
+            let (name, count) = match r {
+                ShowRow::All => ("All".to_string(), app.titles.len()),
+                ShowRow::Kind(k) => (section_name(k).to_string(), app.titles.iter().filter(|t| &t.kind == k).count()),
+                ShowRow::Installed => ("Installed".to_string(), app.state.installed.len()),
+                ShowRow::Wishlist => ("Wishlisted".to_string(), app.state.wishlist.len()),
+            };
+            let on = app.row_on(r);
+            let boxed = if on { "[x] " } else { "[ ] " };
+            let num = count.to_string();
+            let room = w.saturating_sub(4 + num.len() + 1);
+            let name: String = name.chars().take(room).collect();
+            let mut st = Style::default().fg(if on { theme::TEXT_HI } else { theme::DIM });
+            if i == app.show_row {
+                st = st.bg(theme::PANEL_HI).add_modifier(Modifier::BOLD);
+            }
+            lines.push(Line::from(vec![
+                Span::styled(boxed, st.fg(if on { theme::GREEN } else { theme::DIM })),
+                Span::styled(format!("{name:<room$} "), st),
+                Span::styled(num, st.fg(theme::FAINT)),
+            ]));
+            app.hits.push((Rect { x: area.x + 1, y: area.y + lines.len() as u16, width: area.width.saturating_sub(2), height: 1 }, Hit::ShowRow(i)));
+        }
+    }
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(if open { theme::GREEN } else { theme::LINE }))
+        .title(Span::styled(" show ", Style::default().fg(theme::DIM)))
+        .style(Style::default().bg(theme::PANEL));
+    f.render_widget(Paragraph::new(lines).block(block), area);
+    // the folded line goes under the rows' hits, so a row click wins
+    app.hits.insert(0, (Rect { x: area.x, y: area.y, width: area.width, height: 2 }, Hit::ShowHead));
+}
+
+/// What the list shows, in a few words: "everything", or the groups that are
+/// on, then "· mine" parts.
+fn show_summary(app: &App, rows: &[ShowRow], w: usize) -> String {
+    let kinds: Vec<&ShowRow> = rows.iter().filter(|r| matches!(r, ShowRow::Kind(_))).collect();
+    let on: Vec<&str> = kinds
+        .iter()
+        .filter(|r| app.row_on(r))
+        .map(|r| if let ShowRow::Kind(k) = r { short_name(k) } else { "" })
+        .collect();
+    let mut s = match on.len() {
+        0 => "nothing".to_string(),
+        n if n == kinds.len() => "everything".to_string(),
+        _ => on.join(", "),
+    };
+    match (app.show.installed, app.show.wishlist) {
+        (true, true) => s += " · installed or wishlisted",
+        (true, false) => s += " · installed",
+        (false, true) => s += " · wishlisted",
+        _ => {}
+    }
+    if s.chars().count() > w {
+        s = s.chars().take(w.saturating_sub(1)).collect::<String>() + "…";
+    }
+    s
+}
+
+fn short_name(kind: &str) -> &'static str {
+    match kind {
+        "adventure" => "Adventures",
+        "art" => "Art",
+        k => section_name(k),
+    }
 }
 
 fn section_name(kind: &str) -> &'static str {
@@ -501,7 +575,8 @@ fn provenance(t: &Title) -> Vec<Line<'static>> {
 
 fn draw_foot(f: &mut Frame, app: &App, area: Rect) {
     let hints = match app.focus {
-        Focus::List => "↑↓ select  ←→ view  type to search  Enter actions  Tab panels  F5 refresh  Esc quit",
+        Focus::Show => "↑↓ move  Space switch on or off  ↓ past the end or Esc back to the list  type to search",
+        Focus::List => "↑↓ select  ↑ at the top: what to show  type to search  Enter actions  Tab panels  F5 refresh  Esc quit",
         Focus::Actions => "←→ choose  Enter do it  ↑↓ back to list  Tab page  Esc back",
         Focus::Page => "↑↓ scroll  Space pause preview  Tab list  Esc back",
     };

@@ -33,7 +33,7 @@ pub struct State {
     pub played: BTreeMap<String, Played>,
 }
 
-fn read<T: for<'de> Deserialize<'de> + Default>(path: &Path) -> T {
+pub fn read<T: for<'de> Deserialize<'de> + Default>(path: &Path) -> T {
     std::fs::read_to_string(path)
         .ok()
         .and_then(|s| serde_json::from_str(&s).map_err(|e| log::warn!("{}: {e}", path.display())).ok())

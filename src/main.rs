@@ -87,8 +87,8 @@ fn run(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> Result<()> {
         if last_snapshot.elapsed() > Duration::from_millis(500) {
             last_snapshot = std::time::Instant::now();
             log::trace!(
-                "snapshot view={:?} filter={:?} selected={} focus={:?} installs={}",
-                app.view, app.filter, app.selected, app.focus, app.progress.len()
+                "snapshot show={:?} filter={:?} selected={} focus={:?} installs={}",
+                app.show, app.filter, app.selected, app.focus, app.progress.len()
             );
         }
     }

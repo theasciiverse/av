@@ -48,6 +48,18 @@ av info <title>           show a title's details
 
 A title is its id (`av install solitty`) or its full name.
 
+In the catalog: arrow keys move, `Tab` switches between the list and the
+detail pane, `Enter` selects, typing filters, and `Esc` backs out one step
+at a time. The card under the search box picks what the list shows: `↑`
+from the top of the list opens it, `Space` switches a group (games, text
+adventures, MUDs, programs, art and demos, movies) on or off, and two more
+boxes narrow the list to what you have installed or wishlisted. av
+remembers the choice.
+
+The terminal should be at least 128x40 to show a title's preview in full;
+smaller terminals crop it. Some titles draw with Braille or Unicode block
+characters and need a font that has them.
+
 ### Tab completion
 
 `av completions <shell>` prints completion for commands and title ids:
@@ -61,14 +73,6 @@ offline. Add the line for your shell:
 | zsh | `~/.zshrc`, after `compinit` | `source <(av completions zsh)` |
 | fish | run once | `av completions fish > ~/.config/fish/completions/av.fish` |
 | PowerShell | `$PROFILE` | `av completions powershell \| Out-String \| Invoke-Expression` |
-
-In the catalog: arrow keys move, `Tab` switches between the list and the
-detail pane, `Enter` selects, typing filters, and `Esc` backs out one step
-at a time.
-
-The terminal should be at least 128x40 to show a title's preview in full;
-smaller terminals crop it. Some titles draw with Braille or Unicode block
-characters and need a font that has them.
 
 ## How it works
 
