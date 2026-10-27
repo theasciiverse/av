@@ -136,6 +136,9 @@ pub struct App {
     pub show_row: usize,
     pub filter: String,
     pub selected: usize,
+    /// the list's scroll position, in rows, kept between frames so the list
+    /// only moves when the selection would leave the view
+    pub list_offset: usize,
     pub focus: Focus,
     pub action: usize,
     pub page_scroll: u16,
@@ -174,6 +177,7 @@ impl App {
             show_row: 0,
             filter: String::new(),
             selected: 0,
+            list_offset: 0,
             focus: Focus::List,
             action: 0,
             page_scroll: 0,

@@ -290,8 +290,11 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
     let list = List::new(items)
         .block(pane(app.focus == Focus::List, " titles "))
         .highlight_style(Style::default().bg(theme::PANEL_HI).add_modifier(Modifier::BOLD));
-    let mut st = ListState::default().with_selected(Some(selected_row));
+    // a fresh offset each frame would scroll the selection to the bottom
+    // edge, so clicking a row made the list jump under the pointer
+    let mut st = ListState::default().with_offset(app.list_offset).with_selected(Some(selected_row));
     f.render_stateful_widget(list, area, &mut st);
+    app.list_offset = st.offset();
     app.hits.push((area, Hit::List));
     let inner = Rect { x: area.x + 1, y: area.y + 1, width: area.width.saturating_sub(2), height: area.height.saturating_sub(2) };
     for (k, row) in row_title.iter().enumerate().skip(st.offset()).take(inner.height as usize) {
