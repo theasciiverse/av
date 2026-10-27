@@ -128,7 +128,7 @@ fn rgb(c: Color) -> CColor {
 }
 
 /// 1000-based, the way apt and most download tools count.
-fn human(n: u64) -> String {
+pub fn human(n: u64) -> String {
     match n {
         n if n < 1000 => format!("{n} B"),
         n if n < 1_000_000 => format!("{:.0} kB", n as f64 / 1e3),
@@ -251,6 +251,7 @@ impl Ctx {
                 cache: self.paths.cache.clone(),
                 dest: dest.clone(),
                 bin: self.paths.bin.clone(),
+                cancel: None,
             },
             tx,
         );

@@ -11,6 +11,7 @@ use ratatui::layout::{Position, Rect};
 
 use crate::cast::{Cast, Player};
 use crate::catalog::{self, Title};
+use crate::downloads::{Downloads, Phase};
 use serde::{Deserialize, Serialize};
 use crate::install::{self, Progress};
 use crate::paths::Paths;
@@ -104,6 +105,8 @@ pub enum Action {
 pub enum Modal {
     Quit,
     Help,
+    /// the downloads pane; its selection is `App::dl_sel`
+    Downloads,
     Uninstall { id: String },
     Message(String),
     /// a question with buttons, e.g. before launching
@@ -144,6 +147,8 @@ pub enum Hit {
     Mine(Mine),
     Help,
     Support,
+    /// the menu row's download line and its F2 link
+    Downloads,
     /// an action button, by index into `actions()`
     Button(usize),
     /// a button in an open choice dialog, by index into its options
@@ -178,7 +183,9 @@ pub struct App {
     pub modal: Option<Modal>,
     pub uninstall_keep_data: bool,
     pub status: String,
-    pub progress: HashMap<String, (u64, u64, String)>,
+    pub downloads: Downloads,
+    /// the highlighted row in the downloads pane, in `Downloads::ordered()`
+    pub dl_sel: usize,
     pub quit: bool,
     /// set when a title should be launched; main suspends the TUI for it
     pub launch: Option<Title>,
@@ -217,7 +224,8 @@ impl App {
             modal: None,
             uninstall_keep_data: true,
             status: String::new(),
-            progress: HashMap::new(),
+            downloads: Downloads::default(),
+            dl_sel: 0,
             quit: false,
             launch: None,
             player: None,
@@ -295,7 +303,7 @@ impl App {
     }
 
     pub fn status_of(&self, t: &Title) -> Status {
-        if self.progress.contains_key(&t.id) {
+        if self.downloads.busy(&t.id) {
             return Status::Busy;
         }
         match self.state.installed.get(&t.id) {
@@ -377,6 +385,89 @@ impl App {
         self.action = 0;
     }
 
+    /// Put an install or update in the downloads queue and start it when
+    /// nothing else runs.
+    fn enqueue(&mut self, t: &Title) {
+        let from = self.state.installed.get(&t.id).map(|i| i.version.clone());
+        if self.downloads.queue(&t.id, &t.title, &t.version, from) {
+            if self.downloads.running().is_some() {
+                self.status = format!("{} queued; F2 shows the downloads", t.title);
+            }
+            self.pump();
+        }
+    }
+
+    /// Start the next queued download if nothing runs.
+    fn pump(&mut self) {
+        let Some(d) = self.downloads.start_next() else { return };
+        let (id, cancel) = (d.id.clone(), d.cancel.clone());
+        let Some(t) = self.titles.iter().find(|t| t.id == id).cloned() else {
+            self.downloads.fail(&id, "no longer in the catalog".into());
+            return self.pump();
+        };
+        log::info!("download start {id}");
+        install::spawn(
+            install::Job {
+                title: t.clone(),
+                catalog_url: self.catalog_url.clone(),
+                cache: self.paths.cache.clone(),
+                dest: self.paths.title_dir(&t.kind, &t.id),
+                bin: self.paths.bin.clone(),
+                cancel: Some(cancel),
+            },
+            self.tx.clone(),
+        );
+    }
+
+    /// Queue every installed title with a newer version in the catalog.
+    fn update_all(&mut self) {
+        let waiting: Vec<Title> = self.titles.iter().filter(|t| update_waiting(t, &self.state)).cloned().collect();
+        self.status = match waiting.len() {
+            0 => "everything is up to date".into(),
+            n => format!("{n} update{} queued", if n == 1 { "" } else { "s" }),
+        };
+        for t in &waiting {
+            self.enqueue(t);
+        }
+    }
+
+    fn open_downloads(&mut self) {
+        self.dl_sel = 0;
+        self.modal = Some(Modal::Downloads);
+    }
+
+    fn downloads_key(&mut self, k: KeyEvent) {
+        let order = self.downloads.ordered();
+        let at = order.get(self.dl_sel).copied();
+        match k.code {
+            KeyCode::Esc | KeyCode::F(2) => return,
+            KeyCode::Up => self.dl_sel = self.dl_sel.saturating_sub(1),
+            KeyCode::Down => self.dl_sel = (self.dl_sel + 1).min(order.len().saturating_sub(1)),
+            KeyCode::Enter => {
+                if let Some(i) = at
+                    && self.downloads.retry(i)
+                {
+                    self.pump();
+                }
+            }
+            KeyCode::Delete | KeyCode::Backspace => {
+                if let Some(i) = at {
+                    self.downloads.cancel_or_remove(i);
+                }
+            }
+            KeyCode::Char('u') => self.update_all(),
+            KeyCode::Char('r') => {
+                if self.downloads.retry_failed() > 0 {
+                    self.pump();
+                }
+            }
+            KeyCode::Char('c') => self.downloads.clear_finished(),
+            _ => {}
+        }
+        self.dl_sel = self.dl_sel.min(self.downloads.list.len().saturating_sub(1));
+        self.modal = Some(Modal::Downloads);
+    }
+
     fn support(&mut self) {
         let mut options: Vec<(String, Then)> = SUPPORT.iter().map(|(n, u)| (n.to_string(), Then::Open(u.to_string()))).collect();
         options.push(("Close".into(), Then::Cancel));
@@ -453,16 +544,18 @@ impl App {
         while let Ok(p) = self.rx.try_recv() {
             match p {
                 Progress::Bytes { id, done, total } => {
-                    let e = self.progress.entry(id).or_insert((0, 0, String::new()));
-                    e.0 = done;
-                    e.1 = total;
+                    if let Some(d) = self.downloads.running_mut(&id) {
+                        (d.done, d.total) = (done, total);
+                    }
                 }
                 Progress::Status { id, msg } => {
                     log::info!("{id}: {msg}");
-                    self.progress.entry(id).or_insert((0, 0, String::new())).2 = msg;
+                    if let Some(d) = self.downloads.running_mut(&id) {
+                        d.step = msg;
+                    }
                 }
                 Progress::Done { id, installed } => {
-                    self.progress.remove(&id);
+                    self.downloads.finish(&id);
                     self.status = format!("installed {id} {}", installed.version);
                     if !self.paths.bin_on_path()
                         && let Some(b) = &self.paths.bin
@@ -481,11 +574,12 @@ impl App {
                     }
                 }
                 Progress::Failed { id, error } => {
-                    self.progress.remove(&id);
-                    self.status = format!("{id}: install failed");
-                    self.modal = Some(Modal::Message(format!("Installing {id} failed.\n\n{error}")));
+                    self.downloads.fail(&id, error);
+                    let cancelled = self.downloads.list.iter().any(|d| d.id == id && d.phase == Phase::Cancelled);
+                    self.status = if cancelled { format!("{id}: cancelled") } else { format!("{id}: install failed; F2 shows why") };
                 }
             }
+            self.pump();
         }
         while let Ok(CastMsg::Loaded(id, res)) = self.cast_rx.try_recv() {
             self.cast_loading.remove(&id);
@@ -646,6 +740,7 @@ impl App {
             (MouseEventKind::Down(MouseButton::Left), Some(Hit::Mine(m))) => self.only(m),
             (MouseEventKind::Down(MouseButton::Left), Some(Hit::Help)) => self.modal = Some(Modal::Help),
             (MouseEventKind::Down(MouseButton::Left), Some(Hit::Support)) => self.support(),
+            (MouseEventKind::Down(MouseButton::Left), Some(Hit::Downloads)) => self.open_downloads(),
             (MouseEventKind::Down(MouseButton::Left), Some(Hit::ShowRow(i))) => {
                 self.focus = Focus::Show;
                 self.show_row = i;
@@ -741,19 +836,7 @@ impl App {
     fn run(&mut self, a: Action, t: &Title) {
         log::info!("action {a:?} on {}", t.id);
         match a {
-            Action::Install => {
-                install::spawn(
-                    install::Job {
-                        title: t.clone(),
-                        catalog_url: self.catalog_url.clone(),
-                        cache: self.paths.cache.clone(),
-                        dest: self.paths.title_dir(&t.kind, &t.id),
-                        bin: self.paths.bin.clone(),
-                    },
-                    self.tx.clone(),
-                );
-                self.progress.insert(t.id.clone(), (0, 0, "starting".into()));
-            }
+            Action::Install => self.enqueue(t),
             Action::Uninstall => {
                 self.uninstall_keep_data = true;
                 self.modal = Some(Modal::Uninstall { id: t.id.clone() });
@@ -893,6 +976,7 @@ impl App {
                 _ => {}
             },
             Modal::Message(_) | Modal::Help => {}
+            Modal::Downloads => self.downloads_key(k),
             Modal::Uninstall { id } => match k.code {
                 KeyCode::Left | KeyCode::Right | KeyCode::Up | KeyCode::Down => {
                     self.uninstall_keep_data = !self.uninstall_keep_data;

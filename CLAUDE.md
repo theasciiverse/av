@@ -11,7 +11,8 @@ and cache, list with views and filter, detail pane with the live `.cast`
 preview and page Markdown, install with sha256 check, uninstall, launch,
 wishlist, MUD connect in Lera, with telnet as the fallback; shell commands
 with a download bar, 2026-10-13; `.zip` extraction, CI and the release
-workflow, 2026-10-27). No downloads pane, intro or welcome screen yet. Repo:
+workflow, menu row, show card and downloads pane, 2026-10-27). No intro or
+welcome screen yet. Repo:
 github.com/theasciiverse/av (private until launch). This file is the
 canonical design.
 
@@ -210,12 +211,22 @@ platform's cache folder, so deleting it is always safe.
   action. Uninstall asks for confirmation in an overlay, including an
   explicit choice to keep or remove the title's save/config data. `av` needs
   a general modal overlay primitive for this and for the exit prompt.
-- **Downloads pane:** one place for progress, retry after failure and the
-  queue, which also covers "update all". Progress alone is in the menu row
-  for now; the pane with retry and the queue is not built.
+- **Downloads pane** (built 2026-10-27, `src/downloads.rs` keeps the books):
+  F2, or a click on the menu row's download line. Installs and updates run
+  one at a time, Steam style, the rest queued. Sections: Downloading (bar,
+  size, speed, time left), Queued, Failed (the selected one shows its whole
+  error), Cancelled, Done. Enter retries a failed or cancelled one, `r`
+  retries every failure (after a network outage the whole queue fails),
+  Del cancels a running or queued one (the worker checks a stop flag per
+  chunk and deletes its partial file) or removes a finished one, `u` queues
+  every update, `c` clears the finished ones. The list lasts for the
+  session. The menu row's `F2 downloads` turns amber while something runs
+  and red with a count (`✗2`) after failures.
 - **Keys:** arrow keys (no `hjkl` for now), `Tab` between panels, `Enter`
   selects, `Esc` backs out one step at a time; `Esc` at the top level asks
-  before quitting.
+  before quitting. `/` starts a new search from any panel (as in less and
+  vim; it is never typed, no title name has one), F1 help, F2 downloads,
+  F5 refresh.
 - **Offline:** works from the cached catalog, defaulting to the "installed"
   view. Only installing and updating need a connection.
 - **Wishlist:** local only, `wishlist.json`, never synced.

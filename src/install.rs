@@ -4,6 +4,8 @@
 
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
 
 use anyhow::{Context, Result, bail};
@@ -25,6 +27,8 @@ pub struct Job {
     pub cache: PathBuf,
     pub dest: PathBuf,
     pub bin: Option<PathBuf>,
+    /// set from outside to stop the download; checked per chunk
+    pub cancel: Option<Arc<AtomicBool>>,
 }
 
 pub fn spawn(job: Job, tx: Sender<Progress>) {
@@ -32,6 +36,10 @@ pub fn spawn(job: Job, tx: Sender<Progress>) {
         let id = job.title.id.clone();
         let msg = match run(&job, &tx) {
             Ok(installed) => Progress::Done { id, installed },
+            Err(e) if e.to_string() == "cancelled" => {
+                log::info!("install {id} cancelled");
+                Progress::Failed { id, error: "cancelled".into() }
+            }
             Err(e) => {
                 log::error!("install {id} failed: {e:#}");
                 Progress::Failed { id, error: format!("{e:#}") }
@@ -63,6 +71,11 @@ fn run(job: &Job, tx: &Sender<Progress>) -> Result<Installed> {
     let mut hasher = Sha256::new();
     let (mut buf, mut done) = (vec![0u8; 64 * 1024], 0u64);
     loop {
+        if job.cancel.as_ref().is_some_and(|c| c.load(Ordering::Relaxed)) {
+            drop(file);
+            let _ = std::fs::remove_file(&archive);
+            bail!("cancelled");
+        }
         let n = reader.read(&mut buf)?;
         if n == 0 {
             break;

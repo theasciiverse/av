@@ -5,6 +5,7 @@ mod cast;
 mod catalog;
 mod cli;
 mod complete;
+mod downloads;
 mod install;
 mod launch;
 mod md;
@@ -87,8 +88,8 @@ fn run(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> Result<()> {
         if last_snapshot.elapsed() > Duration::from_millis(500) {
             last_snapshot = std::time::Instant::now();
             log::trace!(
-                "snapshot show={:?} filter={:?} selected={} focus={:?} installs={}",
-                app.show, app.filter, app.selected, app.focus, app.progress.len()
+                "snapshot show={:?} filter={:?} selected={} focus={:?} downloading={:?} queued={}",
+                app.show, app.filter, app.selected, app.focus, app.downloads.running().map(|d| &d.id), app.downloads.queued()
             );
         }
     }

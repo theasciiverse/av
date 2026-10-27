@@ -57,6 +57,9 @@ boxes narrow the list to what you have installed, what has an update, or
 what you wishlisted. av remembers the choice. The counts at the top do the
 same in one click, and `F1` shows all the keys.
 
+`F2` opens the downloads: installs and updates run one at a time with the
+rest queued, a failed one can be retried, and `u` queues every update.
+
 The terminal should be at least 128x40 to show a title's preview in full;
 smaller terminals crop it. Some titles draw with Braille or Unicode block
 characters and need a font that has them.

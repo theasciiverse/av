@@ -10,6 +10,8 @@ use ratatui::widgets::{Block, BorderType, Borders, Clear, List, ListItem, ListSt
 
 use crate::app::{App, Focus, Hit, Mine, Modal, ShowRow, Status};
 use crate::catalog::Title;
+use crate::cli::human;
+use crate::downloads::{Download, Phase};
 use crate::{md, theme};
 
 // 26 + the 102-column preview keeps av inside 128 columns
@@ -128,9 +130,23 @@ fn draw_header(f: &mut Frame, app: &mut App, area: Rect) {
     };
     f.render_widget(Paragraph::new(Line::from(count)).alignment(Alignment::Right), top);
 
-    // help and support on the right
-    let links = [("F1 help", Hit::Help, theme::DIM), ("♥ support", Hit::Support, theme::AMBER)];
-    let lw: u16 = links.iter().map(|(l, _, _)| l.chars().count() as u16).sum::<u16>() + 3;
+    // help, downloads and support on the right; downloads in red after a
+    // failure, amber while something runs
+    let failed = app.downloads.failed();
+    let dl_label = if failed > 0 { format!("F2 downloads ✗{failed}") } else { "F2 downloads".to_string() };
+    let dl_color = if failed > 0 {
+        theme::UPDATE
+    } else if app.downloads.running().is_some() {
+        theme::AMBER
+    } else {
+        theme::DIM
+    };
+    let links = [
+        ("F1 help".to_string(), Hit::Help, theme::DIM),
+        (dl_label, Hit::Downloads, dl_color),
+        ("♥ support".to_string(), Hit::Support, theme::AMBER),
+    ];
+    let lw: u16 = links.iter().map(|(l, _, _)| l.chars().count() as u16).sum::<u16>() + 3 * (links.len() as u16 - 1);
     let mut x = (bottom.x + bottom.width).saturating_sub(lw);
     let mut spans = Vec::new();
     for (i, (label, hit, color)) in links.into_iter().enumerate() {
@@ -145,41 +161,47 @@ fn draw_header(f: &mut Frame, app: &mut App, area: Rect) {
     }
     f.render_widget(Paragraph::new(Line::from(spans)).alignment(Alignment::Right), bottom);
 
-    // a download in progress on the left, the first one if there are several
-    if let Some(line) = download_line(app, bottom.width.saturating_sub(lw + 2) as usize) {
-        f.render_widget(Paragraph::new(line), bottom);
+    // the running download on the left; a click opens the pane
+    let dw = bottom.width.saturating_sub(lw + 2);
+    if let Some(line) = download_line(app, dw as usize) {
+        app.hits.push((Rect { x: bottom.x, y: bottom.y, width: (line.width() as u16).min(dw), height: 1 }, Hit::Downloads));
+        f.render_widget(Paragraph::new(line), Rect { width: dw, ..bottom });
     }
 }
 
-/// "↓ solitty  45% ████▌──────" for the first install running, by id, with
-/// "+2 more" when others run too; the step's words while there is no byte
-/// count yet (starting, checksum ok, extracting).
+/// "↓ tetrix  45% ████▌──────" for the running download, with "+2 queued"
+/// when others wait; the step's words while there is no byte count yet
+/// (starting, checksum ok, extracting).
 fn download_line(app: &App, w: usize) -> Option<Line<'static>> {
-    let mut ids: Vec<&String> = app.progress.keys().collect();
-    ids.sort();
-    let id = *ids.first()?;
-    let (done, total, msg) = &app.progress[id];
-    let more = if ids.len() > 1 { format!("  +{} more", ids.len() - 1) } else { String::new() };
-    let name: String = id.chars().take(16).collect();
+    let d = app.downloads.running()?;
+    let queued = app.downloads.queued();
+    let more = if queued > 0 { format!("  +{queued} queued") } else { String::new() };
+    let name: String = d.id.chars().take(16).collect();
     let mut spans = vec![Span::styled(format!("↓ {name} "), Style::default().fg(theme::AMBER))];
-    let downloading = *total > 0 && done < total && (msg.is_empty() || msg == "downloading");
-    if downloading {
-        let bar_w = w.saturating_sub(name.chars().count() + 3 + 5 + more.len()).clamp(4, 16);
-        let eighths = (u128::from(*done) * bar_w as u128 * 8 / u128::from(*total)) as usize;
-        let (full, part) = (eighths / 8, eighths % 8);
-        let mut fill = "█".repeat(full);
-        if part > 0 && full < bar_w {
-            fill.push([' ', '▏', '▎', '▍', '▌', '▋', '▊', '▉'][part]);
-        }
-        let track = "─".repeat(bar_w.saturating_sub(fill.chars().count()));
-        spans.push(Span::styled(format!("{:>3}% ", done * 100 / total), Style::default().fg(theme::TEXT)));
-        spans.push(Span::styled(fill, Style::default().fg(theme::GREEN)));
-        spans.push(Span::styled(track, Style::default().fg(theme::LINE)));
-    } else {
-        spans.push(Span::styled(msg.clone(), Style::default().fg(theme::DIM)));
-    }
+    let bar_w = w.saturating_sub(name.chars().count() + 3 + 5 + more.len()).clamp(4, 16);
+    spans.extend(bar_spans(d, bar_w));
     spans.push(Span::styled(more, Style::default().fg(theme::FAINT)));
     Some(Line::from(spans))
+}
+
+/// "45% ████▌─────" while bytes arrive, the step's words otherwise.
+fn bar_spans(d: &Download, w: usize) -> Vec<Span<'static>> {
+    let downloading = d.total > 0 && d.done < d.total && (d.step.is_empty() || d.step == "downloading");
+    if !downloading {
+        return vec![Span::styled(d.step.clone(), Style::default().fg(theme::DIM))];
+    }
+    let eighths = (u128::from(d.done) * w as u128 * 8 / u128::from(d.total)) as usize;
+    let (full, part) = (eighths / 8, eighths % 8);
+    let mut fill = "█".repeat(full);
+    if part > 0 && full < w {
+        fill.push([' ', '▏', '▎', '▍', '▌', '▋', '▊', '▉'][part]);
+    }
+    let track = "─".repeat(w.saturating_sub(fill.chars().count()));
+    vec![
+        Span::styled(format!("{:>3}% ", d.done * 100 / d.total), Style::default().fg(theme::TEXT)),
+        Span::styled(fill, Style::default().fg(theme::GREEN)),
+        Span::styled(track, Style::default().fg(theme::LINE)),
+    ]
 }
 
 fn draw_search(f: &mut Frame, app: &mut App, area: Rect) {
@@ -546,10 +568,14 @@ fn buttons(app: &App, t: &Title) -> Line<'static> {
 }
 
 fn progress(app: &App, t: &Title) -> Option<Line<'static>> {
-    app.progress.get(&t.id).map(|(done, total, msg)| {
-        let pct = if *total > 0 { done * 100 / total } else { 0 };
-        Line::from(Span::styled(format!("{msg} {pct}%"), Style::default().fg(theme::AMBER)))
-    })
+    let d = app.downloads.list.iter().find(|d| d.id == t.id && !d.finished())?;
+    let mut spans = vec![Span::styled("↓ ", Style::default().fg(theme::AMBER))];
+    if d.phase == Phase::Queued {
+        spans.push(Span::styled("queued; F2 shows the downloads", Style::default().fg(theme::AMBER)));
+    } else {
+        spans.extend(bar_spans(d, 20));
+    }
+    Some(Line::from(spans))
 }
 
 fn facts(app: &App, t: &Title) -> Vec<Line<'static>> {
@@ -667,6 +693,95 @@ fn draw_foot(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(Paragraph::new(line).style(Style::default().bg(theme::PANEL)), area);
 }
 
+/// F2: every download this session, running first, then the queue, the
+/// failed and cancelled ones (Enter retries), and the finished ones.
+fn downloads_text(app: &App, w: usize) -> Text<'static> {
+    let q = &app.downloads;
+    let order = q.ordered();
+    let updates = app.updates();
+    let mut lines = Vec::new();
+    if order.is_empty() {
+        lines.push(Line::from(Span::styled("Nothing downloading.", Style::default().fg(theme::DIM))));
+    }
+    let mut section = "";
+    for (row, &i) in order.iter().enumerate() {
+        let d = &q.list[i];
+        let name = match d.phase {
+            Phase::Running => "Downloading",
+            Phase::Queued => "Queued",
+            Phase::Failed(_) => "Failed",
+            Phase::Cancelled => "Cancelled",
+            Phase::Done => "Done",
+        };
+        if name != section {
+            if !section.is_empty() {
+                lines.push(Line::default());
+            }
+            lines.push(Line::from(Span::styled(name, Style::default().fg(theme::AMBER_SOFT).add_modifier(Modifier::BOLD))));
+            section = name;
+        }
+        let sel = row == app.dl_sel;
+        let base = if sel { Style::default().bg(theme::PANEL_HI).add_modifier(Modifier::BOLD) } else { Style::default() };
+        let (mark, color) = match d.phase {
+            Phase::Running => ("↓", theme::AMBER),
+            Phase::Queued => ("·", theme::DIM),
+            Phase::Failed(_) => ("✗", theme::UPDATE),
+            Phase::Cancelled => ("-", theme::FAINT),
+            Phase::Done => ("✓", theme::INSTALLED),
+        };
+        let what = match (&d.from, &d.phase) {
+            (Some(f), Phase::Done) => format!("updated {f} → {}", d.version),
+            (None, Phase::Done) => format!("installed {}", d.version),
+            (Some(f), _) => format!("update {f} → {}", d.version),
+            (None, _) => format!("install {}", d.version),
+        };
+        let name: String = d.name.chars().take(19).collect();
+        let what: String = what.chars().take(24).collect();
+        let mut spans = vec![
+            Span::styled(format!(" {mark} "), base.fg(color)),
+            Span::styled(format!("{name:<20}"), base.fg(theme::TEXT_HI)),
+            Span::styled(format!("{what:<25}"), base.fg(theme::DIM)),
+        ];
+        match &d.phase {
+            Phase::Running => {
+                spans.extend(bar_spans(d, 14));
+                if d.total > 0 && d.step == "downloading" {
+                    let speed = d.speed();
+                    let left = if speed > 0.0 {
+                        let secs = ((d.total - d.done.min(d.total)) as f64 / speed) as u64;
+                        format!("  {}:{:02}", secs / 60, secs % 60)
+                    } else {
+                        String::new()
+                    };
+                    spans.push(Span::styled(
+                        format!("  {} / {}  {}/s{left}", human(d.done), human(d.total), human(speed as u64)),
+                        Style::default().fg(theme::FAINT),
+                    ));
+                }
+            }
+            Phase::Failed(e) => {
+                let room = w.saturating_sub(3 + 20 + 25);
+                let first: String = e.lines().next().unwrap_or("").chars().take(room).collect();
+                spans.push(Span::styled(first, Style::default().fg(theme::UPDATE)));
+            }
+            _ => {}
+        }
+        lines.push(Line::from(spans));
+        // the selected failure gets its whole message
+        if sel && let Phase::Failed(e) = &d.phase {
+            for l in e.lines() {
+                lines.push(Line::from(Span::styled(format!("     {l}"), Style::default().fg(theme::DIM))));
+            }
+        }
+    }
+    lines.push(Line::default());
+    let hint = format!(
+        "↑↓ select  Enter retry  r retry all  Del cancel or remove  u update all ({updates})  c clear done  Esc close"
+    );
+    lines.push(Line::from(Span::styled(hint, Style::default().fg(theme::FAINT))));
+    Text::from(lines)
+}
+
 /// F1: the keys, the menu row, and the font note from the design.
 fn help_text() -> Text<'static> {
     let head = |s: &'static str| Line::from(Span::styled(s, Style::default().fg(theme::AMBER_SOFT).add_modifier(Modifier::BOLD)));
@@ -681,6 +796,7 @@ fn help_text() -> Text<'static> {
         key("Enter", "the title's actions: install, play, wishlist"),
         key("Tab", "move between the list, the actions and the page"),
         key("Space", "show card: switch a box; page: pause the preview"),
+        key("F2", "downloads: progress, the queue, retry, update all"),
         key("F5", "fetch the catalog again"),
         key("F1", "this help"),
         key("Esc", "back one step; at the top, quit"),
@@ -712,6 +828,12 @@ fn centered(area: Rect, w: u16, h: u16) -> Rect {
 fn draw_modal(f: &mut Frame, app: &App, m: &Modal, area: Rect) -> Vec<(Rect, Hit)> {
     let (title, body, w, h): (&str, Text, u16, u16) = match m {
         Modal::Quit => (" quit ", Text::from("Leave Asciiverse?\n\nEnter to quit, any other key to stay."), 44, 7),
+        Modal::Downloads => {
+            let w = area.width.saturating_sub(4).min(104);
+            let text = downloads_text(app, w.saturating_sub(2) as usize);
+            let h = (text.lines.len() as u16 + 2).min(area.height.saturating_sub(2));
+            (" downloads ", text, w, h)
+        }
         Modal::Help => {
             let text = help_text();
             let h = text.lines.len() as u16 + 2;
