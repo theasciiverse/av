@@ -1,0 +1,18 @@
+Third-party software in av
+==========================
+
+av is built from the open-source crates below. Each is listed with the
+license it is used under, followed by the full text of every license.
+
+{{#each licenses}}
+--------------------------------------------------------------------------------
+{{{name}}}
+
+Used by:
+{{#each used_by}}
+  {{crate.name}} {{crate.version}}{{#if crate.repository}}  {{{crate.repository}}}{{/if}}
+{{/each}}
+
+{{{text}}}
+
+{{/each}}

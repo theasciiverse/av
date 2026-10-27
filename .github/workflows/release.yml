@@ -1,0 +1,95 @@
+# Push a tag like v0.1.0 to build every target and open a draft GitHub
+# Release holding the archives the website's install.sh and install.ps1
+# fetch: av-<target>.tar.gz (av at the top), av-<target>.zip (av.exe at the
+# top) and SHA256SUMS. Publishing the draft is done by hand.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  licenses:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tag matches Cargo.toml
+        shell: bash
+        run: |
+          want="v$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
+          [ "$want" = "$GITHUB_REF_NAME" ] || { echo "tag $GITHUB_REF_NAME, Cargo.toml says $want"; exit 1; }
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo install --locked cargo-about --features cli
+      - run: cargo about generate dist/third-party.hbs -o THIRD-PARTY-LICENSES.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: licenses
+          path: THIRD-PARTY-LICENSES.txt
+
+  build:
+    needs: licenses
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: x86_64-unknown-linux-musl, os: ubuntu-latest, cross: true }
+          - { target: aarch64-unknown-linux-musl, os: ubuntu-latest, cross: true }
+          - { target: x86_64-apple-darwin, os: macos-latest }
+          - { target: aarch64-apple-darwin, os: macos-latest }
+          - { target: x86_64-pc-windows-msvc, os: windows-latest }
+          - { target: aarch64-pc-windows-msvc, os: windows-latest }
+    runs-on: ${{ matrix.os }}
+    env:
+      # Windows: link the C runtime in, so av.exe needs no Visual C++ redistributable
+      RUSTFLAGS: ${{ contains(matrix.target, 'windows') && '-C target-feature=+crt-static' || '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: taiki-e/install-action@v2
+        if: matrix.cross
+        with:
+          tool: cross
+      - name: Build
+        shell: bash
+        run: ${{ matrix.cross && 'cross' || 'cargo' }} build --release --locked --target ${{ matrix.target }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: licenses
+      - name: Package
+        shell: bash
+        run: |
+          mkdir pkg
+          cp README.md THIRD-PARTY-LICENSES.txt pkg/
+          [ -f LICENSE ] && cp LICENSE pkg/
+          if [[ "${{ matrix.target }}" == *windows* ]]; then
+            cp target/${{ matrix.target }}/release/av.exe pkg/
+            (cd pkg && 7z a -tzip ../av-${{ matrix.target }}.zip .)
+          else
+            cp target/${{ matrix.target }}/release/av pkg/
+            tar -czf av-${{ matrix.target }}.tar.gz -C pkg .
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: av-${{ matrix.target }}
+          path: av-${{ matrix.target }}.*
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: av-*
+          merge-multiple: true
+      - run: sha256sum av-* > SHA256SUMS && cat SHA256SUMS
+      - name: Draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" av-* SHA256SUMS --repo "$GITHUB_REPOSITORY" --draft --title "av $GITHUB_REF_NAME" --generate-notes

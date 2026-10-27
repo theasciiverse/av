@@ -4,6 +4,12 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.88"
 description = "The Asciiverse terminal client: browse, install and launch terminal games"
+license = "MIT"
+repository = "https://github.com/theasciiverse/av"
+homepage = "https://asciiverse.sh"
+readme = "README.md"
+keywords = ["terminal", "tui", "games", "launcher", "ascii"]
+categories = ["command-line-utilities", "games"]
 publish = false
 
 [dependencies]

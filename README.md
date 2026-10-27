@@ -1,0 +1,83 @@
+# av
+
+The [Asciiverse](https://asciiverse.sh) client: the whole catalog of
+text-mode games, programs, text adventures, art and MUDs in your terminal.
+Browse it, watch each title's preview, then install, update and launch, on
+Linux, macOS and Windows, in whatever terminal you already use.
+
+## Install
+
+Linux and macOS:
+
+```sh
+curl -fsSL https://asciiverse.sh/install.sh | sh
+```
+
+Windows (PowerShell):
+
+```powershell
+irm https://asciiverse.sh/install.ps1 | iex
+```
+
+Both download the build for your system from this repository's releases,
+check it against `SHA256SUMS` and put `av` on your PATH. To do it by hand,
+take the archive for your system from the
+[latest release](https://github.com/theasciiverse/av/releases/latest) and
+put `av` (Windows: `av.exe`) somewhere on your PATH.
+
+From source, with Rust 1.88 or newer:
+
+```sh
+cargo install --locked --git https://github.com/theasciiverse/av
+```
+
+## Use
+
+`av` alone opens the catalog and your library. With a command it does one
+thing and exits:
+
+```text
+av install <title>...     install titles, or update them to the latest version
+av update [<title>...]    update these titles, or every title with an update
+av uninstall <title>...   remove titles; their saves and settings are kept
+av play <title> [args]    start a title (for a MUD: connect to it)
+av list [installed|updates|wishlist]
+av search <words>         find titles by name, topic, genre or developer
+av info <title>           show a title's details
+```
+
+A title is its id (`av install solitty`) or its full name.
+
+## How it works
+
+There is no server and no account. `av` reads a static `catalog.json` that
+the catalog repository publishes, and caches it, so the library works
+offline. Every download is checked against the sha256 pinned in the reviewed
+catalog before anything is unpacked, and updates only ever happen when you
+start them. Each title runs as its own program; `av` only starts it.
+
+Where things go:
+
+| | Linux | macOS | Windows |
+|---|---|---|---|
+| titles | `~/.local/share/asciiverse/` | `~/Library/Application Support/Asciiverse/` | `%LOCALAPPDATA%\Asciiverse\` |
+| cache, log | `~/.cache/asciiverse/` | `~/Library/Caches/Asciiverse/` | `%LOCALAPPDATA%\Asciiverse\cache\` |
+
+On Linux and macOS each installed title is also linked into `~/.local/bin`,
+so it can be started from the shell by its id. The cache is always safe to
+delete.
+
+`AV_CATALOG_URL` points `av` at another catalog, and `RUST_LOG=av=debug`
+writes a detailed log to `av.log` in the cache folder.
+
+## Adding a title
+
+Titles join the catalog by pull request to the catalog repository, open or
+closed source alike; see its `CONTRIBUTING.md`.
+
+## License
+
+MIT, see [LICENSE](LICENSE). The titles `av` installs are separate programs
+under their own licenses. The open-source crates `av` is built from are
+listed with their licenses in `THIRD-PARTY-LICENSES.txt`, shipped in every
+release archive.
