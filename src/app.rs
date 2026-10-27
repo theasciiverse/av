@@ -44,6 +44,14 @@ pub fn update_waiting(t: &Title, state: &State) -> bool {
     state.installed.get(&t.id).is_some_and(|i| !t.version.is_empty() && i.version != t.version)
 }
 
+/// A line in the downloads pane: a download, or underneath them an update
+/// on offer, which only starts when the player says yes to it.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum PaneRow {
+    Download(usize),
+    Offer(String),
+}
+
 /// The header's shortcuts into the show card's "only mine" boxes.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Mine {
@@ -184,8 +192,10 @@ pub struct App {
     pub uninstall_keep_data: bool,
     pub status: String,
     pub downloads: Downloads,
-    /// the highlighted row in the downloads pane, in `Downloads::ordered()`
+    /// the highlighted row in the downloads pane, in `pane_rows()`
     pub dl_sel: usize,
+    /// offered updates the player said "not now" to, until av restarts
+    pub not_now: HashSet<String>,
     pub quit: bool,
     /// set when a title should be launched; main suspends the TUI for it
     pub launch: Option<Title>,
@@ -226,6 +236,7 @@ impl App {
             status: String::new(),
             downloads: Downloads::default(),
             dl_sel: 0,
+            not_now: HashSet::new(),
             quit: false,
             launch: None,
             player: None,
@@ -419,9 +430,9 @@ impl App {
         );
     }
 
-    /// Queue every installed title with a newer version in the catalog.
+    /// u in the pane: yes to every update on offer at once.
     fn update_all(&mut self) {
-        let waiting: Vec<Title> = self.titles.iter().filter(|t| update_waiting(t, &self.state)).cloned().collect();
+        let waiting: Vec<Title> = self.offers().into_iter().cloned().collect();
         self.status = match waiting.len() {
             0 => "everything is up to date".into(),
             n => format!("{n} update{} queued", if n == 1 { "" } else { "s" }),
@@ -431,30 +442,57 @@ impl App {
         }
     }
 
+    /// Updates waiting that are not queued, running or put off: offered under
+    /// the downloads, each started only by a yes.
+    pub fn offers(&self) -> Vec<&Title> {
+        self.titles
+            .iter()
+            .filter(|t| update_waiting(t, &self.state) && !self.downloads.busy(&t.id) && !self.not_now.contains(&t.id))
+            .collect()
+    }
+
+    /// The pane's lines: every download (running, queued, failed, cancelled,
+    /// done), then underneath them the updates on offer.
+    pub fn pane_rows(&self) -> Vec<PaneRow> {
+        let mut rows: Vec<PaneRow> = self.downloads.ordered().into_iter().map(PaneRow::Download).collect();
+        rows.extend(self.offers().into_iter().map(|t| PaneRow::Offer(t.id.clone())));
+        rows
+    }
+
     fn open_downloads(&mut self) {
         self.dl_sel = 0;
         self.modal = Some(Modal::Downloads);
     }
 
     fn downloads_key(&mut self, k: KeyEvent) {
-        let order = self.downloads.ordered();
-        let at = order.get(self.dl_sel).copied();
+        let rows = self.pane_rows();
+        let at = rows.get(self.dl_sel).cloned();
         match k.code {
             KeyCode::Esc | KeyCode::F(2) => return,
             KeyCode::Up => self.dl_sel = self.dl_sel.saturating_sub(1),
-            KeyCode::Down => self.dl_sel = (self.dl_sel + 1).min(order.len().saturating_sub(1)),
-            KeyCode::Enter => {
-                if let Some(i) = at
-                    && self.downloads.retry(i)
-                {
-                    self.pump();
+            KeyCode::Down => self.dl_sel = (self.dl_sel + 1).min(rows.len().saturating_sub(1)),
+            // yes: an offered update goes in the queue; a failed or cancelled
+            // download goes back in it
+            KeyCode::Enter => match at {
+                Some(PaneRow::Offer(id)) => {
+                    if let Some(t) = self.titles.iter().find(|t| t.id == id).cloned() {
+                        self.enqueue(&t);
+                    }
                 }
-            }
-            KeyCode::Delete | KeyCode::Backspace => {
-                if let Some(i) = at {
-                    self.downloads.cancel_or_remove(i);
+                Some(PaneRow::Download(i)) => {
+                    if self.downloads.retry(i) {
+                        self.pump();
+                    }
                 }
-            }
+                None => {}
+            },
+            KeyCode::Delete | KeyCode::Backspace => match at {
+                Some(PaneRow::Offer(id)) => {
+                    self.not_now.insert(id);
+                }
+                Some(PaneRow::Download(i)) => self.downloads.cancel_or_remove(i),
+                None => {}
+            },
             KeyCode::Char('u') => self.update_all(),
             KeyCode::Char('r') => {
                 if self.downloads.retry_failed() > 0 {
@@ -464,7 +502,7 @@ impl App {
             KeyCode::Char('c') => self.downloads.clear_finished(),
             _ => {}
         }
-        self.dl_sel = self.dl_sel.min(self.downloads.list.len().saturating_sub(1));
+        self.dl_sel = self.dl_sel.min(self.pane_rows().len().saturating_sub(1));
         self.modal = Some(Modal::Downloads);
     }
 

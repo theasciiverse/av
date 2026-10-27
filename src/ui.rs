@@ -694,15 +694,16 @@ fn draw_foot(f: &mut Frame, app: &App, area: Rect) {
 }
 
 /// F2: every download this session, running first, then the queue, the
-/// failed and cancelled ones (Enter retries), and the finished ones.
+/// failed and cancelled ones (Enter retries) and the finished ones; and
+/// underneath them the updates on offer, each started only by a yes.
 fn downloads_text(app: &App, w: usize) -> Text<'static> {
     let q = &app.downloads;
     let order = q.ordered();
-    let updates = app.updates();
     let mut lines = Vec::new();
     if order.is_empty() {
         lines.push(Line::from(Span::styled("Nothing downloading.", Style::default().fg(theme::DIM))));
     }
+    let updates = app.offers().len();
     let mut section = "";
     for (row, &i) in order.iter().enumerate() {
         let d = &q.list[i];
@@ -774,9 +775,33 @@ fn downloads_text(app: &App, w: usize) -> Text<'static> {
             }
         }
     }
+    // underneath the downloads: updates waiting, offered one by one
+    let offers = app.offers();
+    if !offers.is_empty() {
+        if !order.is_empty() {
+            lines.push(Line::default());
+        }
+        lines.push(Line::from(Span::styled("Updates available", Style::default().fg(theme::AMBER_SOFT).add_modifier(Modifier::BOLD))));
+        for (k, t) in offers.iter().enumerate() {
+            let sel = order.len() + k == app.dl_sel;
+            let base = if sel { Style::default().bg(theme::PANEL_HI).add_modifier(Modifier::BOLD) } else { Style::default() };
+            let have = app.state.installed.get(&t.id).map(|i| i.version.clone()).unwrap_or_default();
+            let name: String = t.title.chars().take(19).collect();
+            let what: String = format!("{have} → {}", t.version).chars().take(24).collect();
+            let mut spans = vec![
+                Span::styled(" ▲ ", base.fg(theme::UPDATE)),
+                Span::styled(format!("{name:<20}"), base.fg(theme::TEXT_HI)),
+                Span::styled(format!("{what:<25}"), base.fg(theme::DIM)),
+            ];
+            if sel {
+                spans.push(Span::styled("Enter: update   Del: not now", Style::default().fg(theme::GREEN_HI)));
+            }
+            lines.push(Line::from(spans));
+        }
+    }
     lines.push(Line::default());
     let hint = format!(
-        "↑↓ select  Enter retry  r retry all  Del cancel or remove  u update all ({updates})  c clear done  Esc close"
+        "↑↓ move  Enter yes/retry  r retry all  Del cancel/not now  u update all ({updates})  c clear done  Esc close"
     );
     lines.push(Line::from(Span::styled(hint, Style::default().fg(theme::FAINT))));
     Text::from(lines)

@@ -219,8 +219,12 @@ platform's cache folder, so deleting it is always safe.
   retries every failure (after a network outage the whole queue fails),
   Del cancels a running or queued one (the worker checks a stop flag per
   chunk and deletes its partial file) or removes a finished one, `u` queues
-  every update, `c` clears the finished ones. The list lasts for the
-  session. The menu row's `F2 downloads` turns amber while something runs
+  every update on offer, `c` clears the finished ones. The list lasts for
+  the session. Underneath the downloads, **updates available** are offered
+  one per row (David, 2026-10-27): nothing starts until the player says yes,
+  Enter on the row (or `u` for all of them at once); Del is "not now", which
+  hides that offer until av restarts. Updates are never started by av on its
+  own. The menu row's `F2 downloads` turns amber while something runs
   and red with a count (`✗2`) after failures.
 - **Keys:** arrow keys (no `hjkl` for now), `Tab` between panels, `Enter`
   selects, `Esc` backs out one step at a time; `Esc` at the top level asks

@@ -58,7 +58,9 @@ what you wishlisted. av remembers the choice. The counts at the top do the
 same in one click, and `F1` shows all the keys.
 
 `F2` opens the downloads: installs and updates run one at a time with the
-rest queued, a failed one can be retried, and `u` queues every update.
+rest queued, and a failed one can be retried. Underneath, it offers the
+updates waiting, one per row: Enter says yes to one, `u` to all of them.
+Nothing updates unless you say so.
 
 The terminal should be at least 128x40 to show a title's preview in full;
 smaller terminals crop it. Some titles draw with Braille or Unicode block
