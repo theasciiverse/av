@@ -56,10 +56,10 @@ impl Cast {
             let gap = if version == 2 { time - prev_abs } else { time };
             prev_abs = time;
             t += gap.clamp(0.0, idle);
-            if code == "o" {
-                if let Some(data) = ev.get(2).and_then(|v| v.as_str()) {
-                    events.push((t, data.to_string()));
-                }
+            if code == "o"
+                && let Some(data) = ev.get(2).and_then(|v| v.as_str())
+            {
+                events.push((t, data.to_string()));
             }
         }
         Ok(Cast { cols, rows, events, duration: t })

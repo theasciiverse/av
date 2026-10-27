@@ -267,13 +267,13 @@ impl Ctx {
 
     /// Once per run, after installing: how to start titles from the shell.
     fn path_note(&self) {
-        if let Some(b) = &self.paths.bin {
-            if !self.paths.bin_on_path() {
-                println!(
-                    "\n{} is not on your PATH, so start titles with `av play <title>`, or add this to your shell's startup file:\n  export PATH=\"$HOME/.local/bin:$PATH\"",
-                    tilde(b)
-                );
-            }
+        if let Some(b) = &self.paths.bin
+            && !self.paths.bin_on_path()
+        {
+            println!(
+                "\n{} is not on your PATH, so start titles with `av play <title>`, or add this to your shell's startup file:\n  export PATH=\"$HOME/.local/bin:$PATH\"",
+                tilde(b)
+            );
         }
     }
 
@@ -315,13 +315,13 @@ impl Ctx {
         if !t.is_mud() && !self.state.installed.contains_key(&t.id) {
             bail!("{} is not installed; install it with `av install {}`", t.title, t.id);
         }
-        if let (Some(m), Ok((w, h))) = (t.min_terminal, terminal::size()) {
-            if w < m.cols || h < m.rows {
-                eprintln!(
-                    "{}",
-                    self.paint(format!("{} needs at least {}x{}; this terminal is {w}x{h}", t.title, m.cols, m.rows), theme::AMBER)
-                );
-            }
+        if let (Some(m), Ok((w, h))) = (t.min_terminal, terminal::size())
+            && (w < m.cols || h < m.rows)
+        {
+            eprintln!(
+                "{}",
+                self.paint(format!("{} needs at least {}x{}; this terminal is {w}x{h}", t.title, m.cols, m.rows), theme::AMBER)
+            );
         }
         if !t.is_mud() && self.update_waiting(&t) {
             let have = &self.state.installed[&t.id].version;

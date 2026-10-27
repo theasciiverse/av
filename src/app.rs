@@ -287,11 +287,11 @@ impl App {
                 Progress::Done { id, installed } => {
                     self.progress.remove(&id);
                     self.status = format!("installed {id} {}", installed.version);
-                    if !self.paths.bin_on_path() {
-                        if let Some(b) = &self.paths.bin {
-                            // the welcome screen explains this once; here a reminder is enough
-                            self.status += &format!("; {} is not on your PATH, so start it from av", crate::paths::tilde(b));
-                        }
+                    if !self.paths.bin_on_path()
+                        && let Some(b) = &self.paths.bin
+                    {
+                        // the welcome screen explains this once; here a reminder is enough
+                        self.status += &format!("; {} is not on your PATH, so start it from av", crate::paths::tilde(b));
                     }
                     let current = self.current().is_some_and(|t| t.id == id);
                     self.state.installed.insert(id, installed);
@@ -519,10 +519,10 @@ impl App {
             KeyCode::Right => self.action = (self.action + 1).min(acts.len() - 1),
             KeyCode::Up | KeyCode::Down => self.focus = Focus::List,
             KeyCode::Enter => {
-                if let Some((a, _, enabled)) = acts.get(self.action) {
-                    if *enabled {
-                        self.run(*a, &t);
-                    }
+                if let Some((a, _, enabled)) = acts.get(self.action)
+                    && *enabled
+                {
+                    self.run(*a, &t);
                 }
             }
             _ => {}
@@ -577,32 +577,31 @@ impl App {
     /// Checks before launching: terminal size against the title's minimum,
     /// then whether an update is waiting. Each asks; neither blocks.
     fn request_play(&mut self, t: &Title, size_ok: bool) {
-        if !size_ok {
-            if let (Some(m), Ok((w, h))) = (t.min_terminal, ratatui::crossterm::terminal::size()) {
-                if w < m.cols || h < m.rows {
-                    self.modal = Some(Modal::Choice {
-                        title: " terminal size ".into(),
-                        text: format!(
-                            "{} needs a terminal of at least {}x{}. This one is {w}x{h}.\n\nEnlarge the window first, or play anyway.",
-                            t.title, m.cols, m.rows
-                        ),
-                        options: vec![("Cancel".into(), Then::Cancel), ("Play anyway".into(), Then::Play { id: t.id.clone(), size_ok: true })],
-                        sel: 0,
-                    });
-                    return;
-                }
-            }
+        if !size_ok
+            && let (Some(m), Ok((w, h))) = (t.min_terminal, ratatui::crossterm::terminal::size())
+            && (w < m.cols || h < m.rows)
+        {
+            self.modal = Some(Modal::Choice {
+                title: " terminal size ".into(),
+                text: format!(
+                    "{} needs a terminal of at least {}x{}. This one is {w}x{h}.\n\nEnlarge the window first, or play anyway.",
+                    t.title, m.cols, m.rows
+                ),
+                options: vec![("Cancel".into(), Then::Cancel), ("Play anyway".into(), Then::Play { id: t.id.clone(), size_ok: true })],
+                sel: 0,
+            });
+            return;
         }
         if !t.is_mud() && self.status_of(t) == Status::Update {
             let have = self.state.installed.get(&t.id).map(|i| i.version.clone()).unwrap_or_default();
             self.modal = Some(Modal::Choice {
-                title: " update available ".into(),
-                text: format!("{} {} is out; you have {have}.", t.title, t.version),
-                options: vec![
-                    ("Update first".into(), Then::Install(t.id.clone())),
-                    (format!("Play {have}"), Then::Launch(t.id.clone())),
-                ],
-                sel: 0,
+            title: " update available ".into(),
+            text: format!("{} {} is out; you have {have}.", t.title, t.version),
+            options: vec![
+                ("Update first".into(), Then::Install(t.id.clone())),
+                (format!("Play {have}"), Then::Launch(t.id.clone())),
+            ],
+            sel: 0,
             });
             return;
         }
@@ -614,10 +613,10 @@ impl App {
         match then {
             Then::Cancel => {}
             Then::Play { id, size_ok } => {
-                if let Some(t) = find(self, &id) {
-                    self.request_play(&t, size_ok);
-                }
+            if let Some(t) = find(self, &id) {
+                self.request_play(&t, size_ok);
             }
+        }
             Then::Launch(id) => self.launch = find(self, &id),
             Then::Install(id) => {
                 if let Some(t) = find(self, &id) {
@@ -641,10 +640,10 @@ impl App {
                 None => {
                     self.status = format!("back from {}, played {played}", t.title);
                     // now and then, not every time: point at the developer's own donation page
-                    if let Some(url) = &t.funding {
-                        if sessions % 5 == 0 {
-                            self.status += &format!(". Enjoying it? Support its developer: {url}");
-                        }
+                    if let Some(url) = &t.funding
+                        && sessions.is_multiple_of(5)
+                    {
+                        self.status += &format!(". Enjoying it? Support its developer: {url}");
                     }
                 }
                 Some(how) => {
