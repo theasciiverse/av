@@ -95,6 +95,7 @@ pub struct App {
     pub paths: Paths,
     pub state: State,
     pub titles: Vec<Title>,
+    pub collections: catalog::Collections,
     pub catalog_url: String,
     pub offline: bool,
     pub view: View,
@@ -130,6 +131,7 @@ impl App {
             paths,
             state,
             titles: Vec::new(),
+            collections: Default::default(),
             catalog_url,
             offline: false,
             view: View::All,
@@ -166,6 +168,7 @@ impl App {
                 let rank = catalog::kind_rank;
                 titles.sort_by(|a, b| (rank(&a.kind), a.title.to_lowercase()).cmp(&(rank(&b.kind), b.title.to_lowercase())));
                 self.titles = titles;
+                self.collections = l.catalog.collections;
                 self.offline = l.offline;
                 if l.offline {
                     self.view = View::Installed;
@@ -192,7 +195,7 @@ impl App {
                 View::Installed => self.state.installed.contains_key(&t.id),
                 View::Wishlist => self.state.wishlist.contains(&t.id),
             })
-            .filter(|t| t.matches(&f))
+            .filter(|t| t.matches(&f, &self.collections))
             .collect();
         if !f.is_empty() {
             // within each kind's group, titles whose name matches come first;

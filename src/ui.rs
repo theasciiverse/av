@@ -418,6 +418,10 @@ fn facts(app: &App, t: &Title) -> Vec<Line<'static>> {
     if let Some(u) = &t.upstream {
         lines.push(fact("Original", u.name.clone()));
     }
+    if let Some(name) = t.collection_name(&app.collections) {
+        let n = app.titles.iter().filter(|o| o.collection == t.collection).count();
+        lines.push(fact("Part of", if n > 1 { format!("{name} ({n} games)") } else { name.to_string() }));
+    }
     if !t.version.is_empty() {
         let inst = app.state.installed.get(&t.id).map(|i| format!("  (installed {})", i.version)).unwrap_or_default();
         lines.push(fact("Version", format!("{}{inst}", t.version)));

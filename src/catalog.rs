@@ -16,7 +16,20 @@ const CACHE_TTL: Duration = Duration::from_secs(60 * 60);
 #[derive(Debug, Deserialize)]
 pub struct Catalog {
     pub titles: BTreeMap<String, Title>,
+    /// upstream projects holding several games, each game its own title
+    #[serde(default)]
+    pub collections: BTreeMap<String, Collection>,
 }
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct Collection {
+    pub name: String,
+    pub url: String,
+    pub description: String,
+}
+
+pub type Collections = BTreeMap<String, Collection>;
 
 /// Where a kind's group sits in the list: games first, then text adventures,
 /// programs, art and demos, movies, MUDs last
@@ -49,6 +62,8 @@ pub struct Title {
     // where it comes from and by whom, and the path in `repo` listing what Asciiverse changed
     pub provenance: Option<String>,
     pub changes: Option<String>,
+    // the collection this game comes from, a key in Catalog::collections
+    pub collection: Option<String>,
     pub exec: Exec,
     pub min_terminal: Option<Size>,
     pub requires: Requires,
@@ -122,10 +137,18 @@ impl Title {
         if cfg!(windows) { format!("{base}.exe") } else { base }
     }
 
+    /// The display name of the collection this game comes from.
+    pub fn collection_name<'a>(&'a self, cols: &'a Collections) -> Option<&'a str> {
+        self.collection.as_ref().map(|k| cols.get(k).map(|c| c.name.as_str()).unwrap_or(k.as_str()))
+    }
+
     /// Whether a search (already lowercased) finds this title: name, topics,
-    /// genre, developer or description. An empty search finds everything.
-    pub fn matches(&self, f: &str) -> bool {
+    /// genre, developer, collection or description. An empty search finds
+    /// everything.
+    pub fn matches(&self, f: &str, cols: &Collections) -> bool {
         f.is_empty()
+            || self.collection_name(cols).is_some_and(|c| c.to_lowercase().contains(f))
+            || self.collection.as_deref().is_some_and(|c| c.contains(f))
             || self.title.to_lowercase().contains(f)
             || self.id.contains(f)
             || self.topics.iter().any(|x| x.to_lowercase().contains(f))

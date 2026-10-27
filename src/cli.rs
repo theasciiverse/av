@@ -53,6 +53,7 @@ struct Ctx {
     paths: Paths,
     state: State,
     titles: Vec<Title>,
+    collections: catalog::Collections,
     offline: bool,
     url: String,
     color: bool,
@@ -79,7 +80,7 @@ pub fn run(paths: Paths, url: String, args: Vec<String>) -> Result<()> {
         }
         _ => {}
     }
-    let mut cx = Ctx { state: State::load(&paths.state), paths, titles: Vec::new(), offline: false, url, color, tty };
+    let mut cx = Ctx { state: State::load(&paths.state), paths, titles: Vec::new(), collections: Default::default(), offline: false, url, color, tty };
     let known = ["install", "update", "upgrade", "uninstall", "remove", "play", "run", "list", "ls", "search", "info", "show"];
     if !known.contains(&cmd) {
         bail!("unknown command {cmd:?}\n\n{USAGE}");
@@ -132,6 +133,7 @@ impl Ctx {
         let rank = catalog::kind_rank;
         titles.sort_by(|a, b| (rank(&a.kind), a.title.to_lowercase()).cmp(&(rank(&b.kind), b.title.to_lowercase())));
         self.titles = titles;
+        self.collections = l.catalog.collections;
         self.offline = l.offline;
         if l.offline {
             eprintln!("{}", self.paint("offline: using the cached catalog", theme::AMBER));
@@ -145,7 +147,7 @@ impl Ctx {
         if let Some(t) = self.titles.iter().find(|t| t.id == low || t.title.to_lowercase() == low) {
             return Ok(t.clone());
         }
-        let near: Vec<String> = self.titles.iter().filter(|t| t.matches(&low)).take(5).map(|t| t.id.clone()).collect();
+        let near: Vec<String> = self.titles.iter().filter(|t| t.matches(&low, &self.collections)).take(5).map(|t| t.id.clone()).collect();
         if near.is_empty() {
             bail!("no title {name:?} in the catalog; try `av search {name}`");
         }
@@ -381,7 +383,7 @@ impl Ctx {
 
     fn search(&self, words: &str) -> Result<()> {
         let f = words.to_lowercase();
-        let mut v: Vec<&Title> = self.titles.iter().filter(|t| t.matches(&f)).collect();
+        let mut v: Vec<&Title> = self.titles.iter().filter(|t| t.matches(&f, &self.collections)).collect();
         // titles whose name matches first, the rest after, catalog order kept inside each
         v.sort_by_key(|t| !t.title.to_lowercase().contains(&f));
         if v.is_empty() {
@@ -466,6 +468,14 @@ impl Ctx {
         }
         if let Some(u) = &t.upstream {
             println!("{}{}", label("original"), u.name);
+        }
+        if let Some(name) = t.collection_name(&self.collections) {
+            let others: Vec<&str> = self.titles.iter().filter(|o| o.collection == t.collection && o.id != t.id).map(|o| o.id.as_str()).collect();
+            if others.is_empty() {
+                println!("{}{name}", label("part of"));
+            } else {
+                println!("{}{name}; also {}", label("part of"), others.join(", "));
+            }
         }
         if !t.license.is_empty() {
             println!("{}{}", label("license"), t.license);
