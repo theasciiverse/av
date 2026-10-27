@@ -685,9 +685,17 @@ impl App {
             }
             KeyCode::F(5) => self.refresh(true),
             KeyCode::F(1) => self.modal = Some(Modal::Help),
-            // "/ type to search": the slash only moves to the search, from any
-            // panel; no title name has one, so it is never typed
-            KeyCode::Char('/') => self.focus = Focus::List,
+            KeyCode::F(2) => self.open_downloads(),
+            // "/ type to search": the slash starts a new search from any panel,
+            // as in less and vim; no title name has one, so it is never typed
+            KeyCode::Char('/') => {
+                self.focus = Focus::List;
+                if !self.filter.is_empty() {
+                    let keep = self.current().map(|t| t.id);
+                    self.filter.clear();
+                    self.selected = keep.and_then(|id| self.visible().iter().position(|t| t.id == id)).unwrap_or(0);
+                }
+            }
             KeyCode::Esc => {
                 if self.focus != Focus::List {
                     self.focus = Focus::List;
