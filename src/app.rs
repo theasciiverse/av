@@ -591,6 +591,9 @@ impl App {
             }
             KeyCode::F(5) => self.refresh(true),
             KeyCode::F(1) => self.modal = Some(Modal::Help),
+            // "/ type to search": the slash only moves to the search, from any
+            // panel; no title name has one, so it is never typed
+            KeyCode::Char('/') => self.focus = Focus::List,
             KeyCode::Esc => {
                 if self.focus != Focus::List {
                     self.focus = Focus::List;

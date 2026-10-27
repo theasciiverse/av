@@ -656,9 +656,9 @@ fn provenance(t: &Title) -> Vec<Line<'static>> {
 fn draw_foot(f: &mut Frame, app: &App, area: Rect) {
     let hints = match app.focus {
         Focus::Show => "↑↓ move  Space switch on or off  ↓ past the end or Esc back to the list  type to search",
-        Focus::List => "↑↓ select  ↑ at the top: what to show  type to search  Enter actions  Tab panels  F1 help  Esc quit",
-        Focus::Actions => "←→ choose  Enter do it  ↑↓ back to list  Tab page  Esc back",
-        Focus::Page => "↑↓ scroll  Space pause preview  Tab list  Esc back",
+        Focus::List => "↑↓ select  ↑ at the top: what to show  / or type to search  Enter actions  Tab panels  F1 help  Esc quit",
+        Focus::Actions => "←→ choose  Enter do it  ↑↓ back to list  / search  Tab page  Esc back",
+        Focus::Page => "↑↓ scroll  Space pause preview  / search  Tab list  Esc back",
     };
     let line = Line::from(vec![
         Span::styled(format!(" {} ", app.status), Style::default().fg(theme::AMBER_SOFT)),
@@ -677,7 +677,7 @@ fn help_text() -> Text<'static> {
     Text::from(vec![
         head("Keys"),
         key("↑ ↓", "move in the list; ↑ at its top opens the show card"),
-        key("type", "search names, topics, genres and developers"),
+        key("/ or type", "search names, topics, genres and developers"),
         key("Enter", "the title's actions: install, play, wishlist"),
         key("Tab", "move between the list, the actions and the page"),
         key("Space", "show card: switch a box; page: pause the preview"),
