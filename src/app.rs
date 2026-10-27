@@ -703,13 +703,13 @@ impl App {
         if !t.is_mud() && self.status_of(t) == Status::Update {
             let have = self.state.installed.get(&t.id).map(|i| i.version.clone()).unwrap_or_default();
             self.modal = Some(Modal::Choice {
-            title: " update available ".into(),
-            text: format!("{} {} is out; you have {have}.", t.title, t.version),
-            options: vec![
-                ("Update first".into(), Then::Install(t.id.clone())),
-                (format!("Play {have}"), Then::Launch(t.id.clone())),
-            ],
-            sel: 0,
+                title: " update available ".into(),
+                text: format!("{} {} is out; you have {have}.", t.title, t.version),
+                options: vec![
+                    ("Update first".into(), Then::Install(t.id.clone())),
+                    (format!("Play {have}"), Then::Launch(t.id.clone())),
+                ],
+                sel: 0,
             });
             return;
         }
@@ -721,10 +721,10 @@ impl App {
         match then {
             Then::Cancel => {}
             Then::Play { id, size_ok } => {
-            if let Some(t) = find(self, &id) {
-                self.request_play(&t, size_ok);
+                if let Some(t) = find(self, &id) {
+                    self.request_play(&t, size_ok);
+                }
             }
-        }
             Then::Launch(id) => self.launch = find(self, &id),
             Then::Install(id) => {
                 if let Some(t) = find(self, &id) {
