@@ -22,6 +22,7 @@ sha2 = "0.11.0"
 tar = "0.4.46"
 unicode-width = "0.2.2"
 ureq = "3.4.2"
+zip = { version = "9.1.2", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 
 [profile.release]
 lto = "thin"

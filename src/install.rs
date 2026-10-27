@@ -87,12 +87,7 @@ fn run(job: &Job, tx: &Sender<Progress>) -> Result<Installed> {
     let staging = parent.join(format!(".{}.new", t.id));
     let _ = std::fs::remove_dir_all(&staging);
     std::fs::create_dir_all(&staging)?;
-    if name.ends_with(".tar.gz") || name.ends_with(".tgz") {
-        let gz = flate2::read::GzDecoder::new(std::fs::File::open(&archive)?);
-        tar::Archive::new(gz).unpack(&staging).context("extract tar.gz")?;
-    } else {
-        bail!("unsupported archive {name} (zip support is not built yet)");
-    }
+    extract(&archive, &name, &staging)?;
     let exe = find_exec(&staging, &t.exec_name()).with_context(|| format!("{} not found in the archive", t.exec_name()))?;
     set_executable(&exe)?;
     // an update keeps what the title wrote next to itself (saves, scores,
@@ -116,6 +111,20 @@ fn run(job: &Job, tx: &Sender<Progress>) -> Result<Installed> {
         kind: t.kind.clone(),
         target: target.into(),
     })
+}
+
+/// Unpack by the archive's name: `.tar.gz` on Linux and macOS, `.zip` on
+/// Windows. Both refuse entries that would land outside `dest`.
+fn extract(archive: &Path, name: &str, dest: &Path) -> Result<()> {
+    let file = std::fs::File::open(archive)?;
+    if name.ends_with(".tar.gz") || name.ends_with(".tgz") {
+        tar::Archive::new(flate2::read::GzDecoder::new(file)).unpack(dest).context("extract tar.gz")?;
+    } else if name.ends_with(".zip") {
+        zip::ZipArchive::new(file).and_then(|mut z| z.extract(dest)).context("extract zip")?;
+    } else {
+        bail!("unsupported archive {name}: av unpacks .tar.gz and .zip");
+    }
+    Ok(())
 }
 
 /// Move every file or folder under `old` that has no counterpart under `new`
@@ -198,8 +207,32 @@ fn hex(b: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::carry_over;
+    use super::{carry_over, extract, find_exec};
     use std::fs;
+    use std::io::Write;
+
+    #[test]
+    fn zip_extracts_with_the_binary_one_folder_down() {
+        let root = std::env::temp_dir().join(format!("av-zip-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let archive = root.join("game-x86_64-pc-windows-msvc.zip");
+        let mut z = zip::ZipWriter::new(fs::File::create(&archive).unwrap());
+        let opts = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+        z.add_directory("game/data/", opts).unwrap();
+        z.start_file("game/game.exe", opts).unwrap();
+        z.write_all(b"binary").unwrap();
+        z.start_file("game/data/levels.txt", opts).unwrap();
+        z.write_all(b"level 1").unwrap();
+        z.finish().unwrap();
+
+        let dest = root.join("out");
+        extract(&archive, "game-x86_64-pc-windows-msvc.zip", &dest).unwrap();
+        assert_eq!(find_exec(&dest, "game.exe"), Some(dest.join("game/game.exe")));
+        assert_eq!(fs::read_to_string(dest.join("game/data/levels.txt")).unwrap(), "level 1");
+        assert!(extract(&archive, "game.7z", &dest).is_err());
+        let _ = fs::remove_dir_all(&root);
+    }
 
     #[test]
     fn update_keeps_files_the_archive_does_not_have() {

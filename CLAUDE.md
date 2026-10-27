@@ -68,7 +68,8 @@ Rust + Ratatui, one binary crate, its own private git repo
 
 Added in the first cut (2026-10-10): `ureq` 3.4 (HTTP, MIT OR Apache-2.0),
 `sha2` 0.11 (checksums), `tar` 0.4 + `flate2` 1.1 (`.tar.gz`), `serde` /
-`serde_json`, `anyhow`. Still to add: `zip` for Windows archives. Ratatui
+`serde_json`, `anyhow`. Added 2026-10-27: `zip` 9.1 (MIT), deflate only, on
+the same `flate2`/`zlib-rs` as `.tar.gz`. Ratatui
 0.30's own crossterm re-export is used rather than a direct dependency.
 
 ## Catalog and updates
