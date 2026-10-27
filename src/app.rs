@@ -18,15 +18,37 @@ use crate::state::State;
 
 /// What the list shows, set in the card under the search box and kept in
 /// the config dir. It stores the kinds switched off, so a kind that is new
-/// to the catalog shows up. `installed` and `wishlist` narrow the list to
-/// the player's own titles: either one, or both together (installed or
-/// wishlisted).
+/// to the catalog shows up. `installed`, `updates` and `wishlist` narrow the
+/// list to the player's own titles: any one, or several together (a title
+/// passing any of them).
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Show {
     pub hidden: BTreeSet<String>,
     pub installed: bool,
+    pub updates: bool,
     pub wishlist: bool,
+}
+
+/// Where donations to Asciiverse go: the same list as the website's Support
+/// menu (`SUPPORT` in websites/Asciiverse/js/site.js), kept in step by hand.
+/// Neither page exists yet (checked 2026-10-13).
+pub const SUPPORT: [(&str, &str); 2] = [
+    ("GitHub Sponsors", "https://github.com/sponsors/theasciiverse"),
+    ("Patreon", "https://www.patreon.com/asciiverse"),
+];
+
+/// Whether an installed title has a newer version in the catalog.
+pub fn update_waiting(t: &Title, state: &State) -> bool {
+    state.installed.get(&t.id).is_some_and(|i| !t.version.is_empty() && i.version != t.version)
+}
+
+/// The header's shortcuts into the show card's "only mine" boxes.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Mine {
+    Installed,
+    Updates,
+    Wishlist,
 }
 
 impl Show {
@@ -45,8 +67,9 @@ impl Show {
 
     pub fn lets_through(&self, t: &Title, state: &State) -> bool {
         !self.hidden.contains(&t.kind)
-            && (!(self.installed || self.wishlist)
+            && (!(self.installed || self.updates || self.wishlist)
                 || (self.installed && state.installed.contains_key(&t.id))
+                || (self.updates && update_waiting(t, state))
                 || (self.wishlist && state.wishlist.contains(&t.id)))
     }
 }
@@ -57,6 +80,7 @@ pub enum ShowRow {
     All,
     Kind(String),
     Installed,
+    Updates,
     Wishlist,
 }
 
@@ -79,6 +103,7 @@ pub enum Action {
 
 pub enum Modal {
     Quit,
+    Help,
     Uninstall { id: String },
     Message(String),
     /// a question with buttons, e.g. before launching
@@ -94,6 +119,8 @@ pub enum Then {
     /// launch now, all checks done
     Launch(String),
     Install(String),
+    /// open a link in the browser
+    Open(String),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -113,8 +140,14 @@ pub enum Hit {
     ShowHead,
     /// a line in the open show card, by index into `show_rows()`
     ShowRow(usize),
+    /// a header shortcut: only installed, only updates, only wishlisted
+    Mine(Mine),
+    Help,
+    Support,
     /// an action button, by index into `actions()`
     Button(usize),
+    /// a button in an open choice dialog, by index into its options
+    Choice(usize),
     List,
     Search,
     Detail,
@@ -267,7 +300,7 @@ impl App {
         }
         match self.state.installed.get(&t.id) {
             None => Status::NotInstalled,
-            Some(i) if !t.version.is_empty() && i.version != t.version => Status::Update,
+            Some(_) if update_waiting(t, &self.state) => Status::Update,
             Some(_) => Status::Installed,
         }
     }
@@ -303,7 +336,7 @@ impl App {
         }
         let mut rows = vec![ShowRow::All];
         rows.extend(kinds.into_iter().map(|k| ShowRow::Kind(k.to_string())));
-        rows.extend([ShowRow::Installed, ShowRow::Wishlist]);
+        rows.extend([ShowRow::Installed, ShowRow::Updates, ShowRow::Wishlist]);
         rows
     }
 
@@ -312,8 +345,50 @@ impl App {
             ShowRow::All => self.show.hidden.is_empty(),
             ShowRow::Kind(k) => !self.show.hidden.contains(k),
             ShowRow::Installed => self.show.installed,
+            ShowRow::Updates => self.show.updates,
             ShowRow::Wishlist => self.show.wishlist,
         }
+    }
+
+    /// Installed titles with a newer version in the catalog.
+    pub fn updates(&self) -> usize {
+        self.titles.iter().filter(|t| update_waiting(t, &self.state)).count()
+    }
+
+    /// A header shortcut: show only that part of the player's titles, or,
+    /// when the list already shows exactly that, all of them again.
+    fn only(&mut self, m: Mine) {
+        let keep = self.current().map(|t| t.id);
+        let want = (m == Mine::Installed, m == Mine::Updates, m == Mine::Wishlist);
+        let now = (self.show.installed, self.show.updates, self.show.wishlist);
+        (self.show.installed, self.show.updates, self.show.wishlist) = if now == want { (false, false, false) } else { want };
+        self.show_changed(keep);
+    }
+
+    /// After the show settings change: save them, and keep the highlighted
+    /// title selected when it is still in the list.
+    fn show_changed(&mut self, keep: Option<String>) {
+        log::info!("show {:?}", self.show);
+        if let Err(e) = self.show.save(&self.paths.config) {
+            self.status = format!("could not save what to show: {e:#}");
+        }
+        self.selected = keep.and_then(|id| self.visible().iter().position(|t| t.id == id)).unwrap_or(0);
+        self.page_scroll = 0;
+        self.action = 0;
+    }
+
+    fn support(&mut self) {
+        let mut options: Vec<(String, Then)> = SUPPORT.iter().map(|(n, u)| (n.to_string(), Then::Open(u.to_string()))).collect();
+        options.push(("Close".into(), Then::Cancel));
+        let links: String = SUPPORT.iter().map(|(n, u)| format!("\n  {n}: {u}")).collect();
+        self.modal = Some(Modal::Choice {
+            title: " support Asciiverse ".into(),
+            text: format!(
+                "Asciiverse is free and runs on donations. Titles whose developers take donations link to them on their own page.\n{links}\n\nPick one to open it in your browser."
+            ),
+            options,
+            sel: 0,
+        });
     }
 
     /// Switch a show card line; the highlighted title stays selected when it
@@ -333,15 +408,11 @@ impl App {
                 }
             }
             ShowRow::Installed => self.show.installed = !self.show.installed,
+            ShowRow::Updates => self.show.updates = !self.show.updates,
             ShowRow::Wishlist => self.show.wishlist = !self.show.wishlist,
         }
-        log::info!("show {r:?} -> {:?}", self.show);
-        if let Err(e) = self.show.save(&self.paths.config) {
-            self.status = format!("could not save what to show: {e:#}");
-        }
-        self.selected = keep.and_then(|id| self.visible().iter().position(|t| t.id == id)).unwrap_or(0);
-        self.page_scroll = 0;
-        self.action = 0;
+        log::info!("show card {r:?}");
+        self.show_changed(keep);
     }
 
     fn show_key(&mut self, k: KeyEvent) {
@@ -519,6 +590,7 @@ impl App {
                 };
             }
             KeyCode::F(5) => self.refresh(true),
+            KeyCode::F(1) => self.modal = Some(Modal::Help),
             KeyCode::Esc => {
                 if self.focus != Focus::List {
                     self.focus = Focus::List;
@@ -546,9 +618,17 @@ impl App {
             log::debug!("mouse {:?} at {},{} hit {hit:?}", m.kind, m.column, m.row);
         }
         if let Some(modal) = self.modal.take() {
-            // a click closes a note; other dialogs stay keyboard-driven
-            if !matches!(modal, Modal::Message(_)) || !matches!(m.kind, MouseEventKind::Down(_)) {
-                self.modal = Some(modal);
+            let down = matches!(m.kind, MouseEventKind::Down(_));
+            match (modal, hit) {
+                // a click on a choice dialog's button picks it
+                (Modal::Choice { options, .. }, Some(Hit::Choice(i))) if m.kind == MouseEventKind::Down(MouseButton::Left) => {
+                    if let Some((_, then)) = options.get(i).cloned() {
+                        self.choose(then);
+                    }
+                }
+                // a click closes a note; other dialogs stay open
+                (Modal::Message(_) | Modal::Help, _) if down => {}
+                (modal, _) => self.modal = Some(modal),
             }
             return;
         }
@@ -560,6 +640,9 @@ impl App {
             (MouseEventKind::Down(MouseButton::Left), Some(Hit::ShowHead)) => {
                 self.focus = if self.focus == Focus::Show { Focus::List } else { Focus::Show };
             }
+            (MouseEventKind::Down(MouseButton::Left), Some(Hit::Mine(m))) => self.only(m),
+            (MouseEventKind::Down(MouseButton::Left), Some(Hit::Help)) => self.modal = Some(Modal::Help),
+            (MouseEventKind::Down(MouseButton::Left), Some(Hit::Support)) => self.support(),
             (MouseEventKind::Down(MouseButton::Left), Some(Hit::ShowRow(i))) => {
                 self.focus = Focus::Show;
                 self.show_row = i;
@@ -731,6 +814,12 @@ impl App {
                     self.run(Action::Install, &t);
                 }
             }
+            Then::Open(url) => {
+                self.status = match crate::launch::open_url(&url) {
+                    Ok(()) => format!("opened {url} in your browser"),
+                    Err(e) => format!("could not open a browser ({e}); the link is {url}"),
+                };
+            }
         }
     }
 
@@ -800,7 +889,7 @@ impl App {
                 KeyCode::Enter | KeyCode::Char('y') => self.quit = true,
                 _ => {}
             },
-            Modal::Message(_) => {}
+            Modal::Message(_) | Modal::Help => {}
             Modal::Uninstall { id } => match k.code {
                 KeyCode::Left | KeyCode::Right | KeyCode::Up | KeyCode::Down => {
                     self.uninstall_keep_data = !self.uninstall_keep_data;
@@ -835,4 +924,33 @@ impl App {
 /// FNV-1a, enough to tell cache keys apart without another dependency.
 fn fnv1a(s: &str) -> u64 {
     s.bytes().fold(0xcbf2_9ce4_8422_2325, |h, b| (h ^ b as u64).wrapping_mul(0x0100_0000_01b3))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state::Installed;
+
+    #[test]
+    fn show_filters_by_kind_and_by_mine() {
+        let dir = std::env::temp_dir().join(format!("av-show-{}", std::process::id()));
+        let mut state = State::load(&dir);
+        let title = |id: &str, kind: &str, version: &str| Title { id: id.into(), kind: kind.into(), version: version.into(), ..Default::default() };
+        let (old, cur, mud, wish) = (title("old", "game", "2"), title("cur", "game", "1"), title("mud", "mud", ""), title("wish", "game", "1"));
+        for (id, v) in [("old", "1"), ("cur", "1")] {
+            let i = Installed { id: id.into(), version: v.into(), sha256: String::new(), installed_at: String::new(), kind: "game".into(), target: String::new() };
+            state.installed.insert(id.into(), i);
+        }
+        state.wishlist.insert("wish".into());
+        let passes = |s: &Show| [&old, &cur, &mud, &wish].iter().filter(|t| s.lets_through(t, &state)).map(|t| t.id.as_str()).collect::<Vec<_>>();
+
+        assert_eq!(passes(&Show::default()), ["old", "cur", "mud", "wish"]);
+        let no_games = Show { hidden: ["game".to_string()].into(), ..Default::default() };
+        assert_eq!(passes(&no_games), ["mud"]);
+        assert_eq!(passes(&Show { updates: true, ..Default::default() }), ["old"]);
+        assert_eq!(passes(&Show { installed: true, ..Default::default() }), ["old", "cur"]);
+        // several "only mine" boxes: a title passing any of them
+        assert_eq!(passes(&Show { updates: true, wishlist: true, ..Default::default() }), ["old", "wish"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

@@ -53,8 +53,9 @@ detail pane, `Enter` selects, typing filters, and `Esc` backs out one step
 at a time. The card under the search box picks what the list shows: `↑`
 from the top of the list opens it, `Space` switches a group (games, text
 adventures, MUDs, programs, art and demos, movies) on or off, and two more
-boxes narrow the list to what you have installed or wishlisted. av
-remembers the choice.
+boxes narrow the list to what you have installed, what has an update, or
+what you wishlisted. av remembers the choice. The counts at the top do the
+same in one click, and `F1` shows all the keys.
 
 The terminal should be at least 128x40 to show a title's preview in full;
 smaller terminals crop it. Some titles draw with Braille or Unicode block

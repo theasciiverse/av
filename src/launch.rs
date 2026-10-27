@@ -18,6 +18,29 @@ pub struct Outcome {
     pub log: Option<PathBuf>,
 }
 
+/// Open a link in the browser with the system's own opener, detached and
+/// silent, so nothing it prints lands on av's screen.
+pub fn open_url(url: &str) -> std::io::Result<()> {
+    let mut cmd = if cfg!(windows) {
+        // start's first quoted argument is the window title
+        let mut c = Command::new("cmd");
+        c.args(["/C", "start", "", url]);
+        c
+    } else if cfg!(target_os = "macos") {
+        let mut c = Command::new("open");
+        c.arg(url);
+        c
+    } else {
+        let mut c = Command::new("xdg-open");
+        c.arg(url);
+        c
+    };
+    let mut child = cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn()?;
+    // reap it in the background so it never lingers as a zombie
+    std::thread::spawn(move || child.wait());
+    Ok(())
+}
+
 pub fn run(mut cmd: Command, log: Option<PathBuf>) -> Outcome {
     if let Some(path) = &log {
         if let Some(dir) = path.parent() {

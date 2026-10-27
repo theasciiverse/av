@@ -8,7 +8,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, List, ListItem, ListState, Paragraph, Widget, Wrap};
 
-use crate::app::{App, Focus, Hit, Modal, ShowRow, Status};
+use crate::app::{App, Focus, Hit, Mine, Modal, ShowRow, Status};
 use crate::catalog::Title;
 use crate::{md, theme};
 
@@ -35,7 +35,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
                 "The catalog is empty."
             } else if !app.filter.is_empty() {
                 "Nothing matches the search. Esc clears it."
-            } else if app.show.installed || app.show.wishlist {
+            } else if app.show.installed || app.show.updates || app.show.wishlist {
                 "None of your titles are in the groups shown. Change what to show in the card above the list (↑ from its top)."
             } else {
                 "No groups are switched on. Pick some in the card above the list (↑ from its top)."
@@ -44,9 +44,9 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         }
     }
     draw_foot(f, app, foot);
-    if let Some(m) = &app.modal {
-        draw_modal(f, app, m, area);
-    }
+    // the dialog's buttons go last, on top of everything under it
+    let buttons = app.modal.as_ref().map(|m| draw_modal(f, app, m, area)).unwrap_or_default();
+    app.hits.extend(buttons);
 }
 
 fn pane(focused: bool, title: &str) -> Block<'static> {
@@ -92,20 +92,94 @@ fn draw_header(f: &mut Frame, app: &mut App, area: Rect) {
         f.render_widget(Paragraph::new(Line::from(spans)), Rect { x: x0, y: area.y + row, width: total.min(area.width), height: 1 });
     }
 
-    // right: catalog state, and how much of it the list shows
+    // right of the slogan, the menu row: the player's library and the
+    // catalog count on top, downloads, help and support below
     let rx = x0 + total + 3;
     let rw = (area.x + area.width).saturating_sub(rx + 1);
-    let info = if app.offline {
-        Span::styled("offline: showing the cached catalog", Style::default().fg(theme::AMBER))
+    let top = Rect { x: rx, y: area.y, width: rw, height: 1 };
+    let bottom = Rect { x: rx, y: area.y + 1, width: rw, height: 1 };
+
+    let updates = app.updates();
+    let plural = |n: usize, one: &str, many: &str| format!("{n} {}", if n == 1 { one } else { many });
+    let chips = [
+        ("● ", plural(app.state.installed.len(), "installed", "installed"), theme::INSTALLED, app.state.installed.len(), Mine::Installed),
+        ("▲ ", plural(updates, "update", "updates"), theme::UPDATE, updates, Mine::Updates),
+        ("♥ ", plural(app.state.wishlist.len(), "wishlisted", "wishlisted"), theme::AMBER_SOFT, app.state.wishlist.len(), Mine::Wishlist),
+    ];
+    let mut spans = Vec::new();
+    let mut x = rx;
+    for (mark, label, color, n, m) in chips {
+        let st = Style::default().fg(if n == 0 { theme::FAINT } else { color });
+        let w = (mark.chars().count() + label.chars().count()) as u16;
+        app.hits.push((Rect { x, y: area.y, width: w, height: 1 }, Hit::Mine(m)));
+        spans.push(Span::styled(mark, st));
+        spans.push(Span::styled(label, st));
+        spans.push(Span::raw("  "));
+        x += w + 2;
+    }
+    f.render_widget(Paragraph::new(Line::from(spans)), top);
+    let shown = app.visible().len();
+    let count = if app.offline {
+        Span::styled("offline: cached catalog", Style::default().fg(theme::AMBER))
+    } else if shown != app.titles.len() {
+        Span::styled(format!("showing {shown} of {}", app.titles.len()), Style::default().fg(theme::DIM))
     } else {
         Span::styled(format!("{} titles", app.titles.len()), Style::default().fg(theme::FAINT))
     };
-    f.render_widget(Paragraph::new(Line::from(info)).alignment(Alignment::Right), Rect { x: rx, y: area.y, width: rw, height: 1 });
-    let shown = app.visible().len();
-    if shown != app.titles.len() {
-        let line = Line::from(Span::styled(format!("showing {shown}"), Style::default().fg(theme::DIM)));
-        f.render_widget(Paragraph::new(line).alignment(Alignment::Right), Rect { x: rx, y: area.y + 1, width: rw, height: 1 });
+    f.render_widget(Paragraph::new(Line::from(count)).alignment(Alignment::Right), top);
+
+    // help and support on the right
+    let links = [("F1 help", Hit::Help, theme::DIM), ("♥ support", Hit::Support, theme::AMBER)];
+    let lw: u16 = links.iter().map(|(l, _, _)| l.chars().count() as u16).sum::<u16>() + 3;
+    let mut x = (bottom.x + bottom.width).saturating_sub(lw);
+    let mut spans = Vec::new();
+    for (i, (label, hit, color)) in links.into_iter().enumerate() {
+        if i > 0 {
+            spans.push(Span::raw("   "));
+            x += 3;
+        }
+        let w = label.chars().count() as u16;
+        app.hits.push((Rect { x, y: bottom.y, width: w, height: 1 }, hit));
+        spans.push(Span::styled(label, Style::default().fg(color)));
+        x += w;
     }
+    f.render_widget(Paragraph::new(Line::from(spans)).alignment(Alignment::Right), bottom);
+
+    // a download in progress on the left, the first one if there are several
+    if let Some(line) = download_line(app, bottom.width.saturating_sub(lw + 2) as usize) {
+        f.render_widget(Paragraph::new(line), bottom);
+    }
+}
+
+/// "↓ solitty  45% ████▌──────" for the first install running, by id, with
+/// "+2 more" when others run too; the step's words while there is no byte
+/// count yet (starting, checksum ok, extracting).
+fn download_line(app: &App, w: usize) -> Option<Line<'static>> {
+    let mut ids: Vec<&String> = app.progress.keys().collect();
+    ids.sort();
+    let id = *ids.first()?;
+    let (done, total, msg) = &app.progress[id];
+    let more = if ids.len() > 1 { format!("  +{} more", ids.len() - 1) } else { String::new() };
+    let name: String = id.chars().take(16).collect();
+    let mut spans = vec![Span::styled(format!("↓ {name} "), Style::default().fg(theme::AMBER))];
+    let downloading = *total > 0 && done < total && (msg.is_empty() || msg == "downloading");
+    if downloading {
+        let bar_w = w.saturating_sub(name.chars().count() + 3 + 5 + more.len()).clamp(4, 16);
+        let eighths = (u128::from(*done) * bar_w as u128 * 8 / u128::from(*total)) as usize;
+        let (full, part) = (eighths / 8, eighths % 8);
+        let mut fill = "█".repeat(full);
+        if part > 0 && full < bar_w {
+            fill.push([' ', '▏', '▎', '▍', '▌', '▋', '▊', '▉'][part]);
+        }
+        let track = "─".repeat(bar_w.saturating_sub(fill.chars().count()));
+        spans.push(Span::styled(format!("{:>3}% ", done * 100 / total), Style::default().fg(theme::TEXT)));
+        spans.push(Span::styled(fill, Style::default().fg(theme::GREEN)));
+        spans.push(Span::styled(track, Style::default().fg(theme::LINE)));
+    } else {
+        spans.push(Span::styled(msg.clone(), Style::default().fg(theme::DIM)));
+    }
+    spans.push(Span::styled(more, Style::default().fg(theme::FAINT)));
+    Some(Line::from(spans))
 }
 
 fn draw_search(f: &mut Frame, app: &mut App, area: Rect) {
@@ -159,6 +233,7 @@ fn draw_show(f: &mut Frame, app: &mut App, area: Rect) {
                 ShowRow::All => ("All".to_string(), app.titles.len()),
                 ShowRow::Kind(k) => (section_name(k).to_string(), app.titles.iter().filter(|t| &t.kind == k).count()),
                 ShowRow::Installed => ("Installed".to_string(), app.state.installed.len()),
+                ShowRow::Updates => ("Updates".to_string(), app.updates()),
                 ShowRow::Wishlist => ("Wishlisted".to_string(), app.state.wishlist.len()),
             };
             let on = app.row_on(r);
@@ -202,11 +277,13 @@ fn show_summary(app: &App, rows: &[ShowRow], w: usize) -> String {
         n if n == kinds.len() => "everything".to_string(),
         _ => on.join(", "),
     };
-    match (app.show.installed, app.show.wishlist) {
-        (true, true) => s += " · installed or wishlisted",
-        (true, false) => s += " · installed",
-        (false, true) => s += " · wishlisted",
-        _ => {}
+    let mine: Vec<&str> = [(app.show.installed, "installed"), (app.show.updates, "updates"), (app.show.wishlist, "wishlisted")]
+        .into_iter()
+        .filter(|(on, _)| *on)
+        .map(|(_, w)| w)
+        .collect();
+    if !mine.is_empty() {
+        s += &format!(" · {}", mine.join(" or "));
     }
     if s.chars().count() > w {
         s = s.chars().take(w.saturating_sub(1)).collect::<String>() + "…";
@@ -579,7 +656,7 @@ fn provenance(t: &Title) -> Vec<Line<'static>> {
 fn draw_foot(f: &mut Frame, app: &App, area: Rect) {
     let hints = match app.focus {
         Focus::Show => "↑↓ move  Space switch on or off  ↓ past the end or Esc back to the list  type to search",
-        Focus::List => "↑↓ select  ↑ at the top: what to show  type to search  Enter actions  Tab panels  F5 refresh  Esc quit",
+        Focus::List => "↑↓ select  ↑ at the top: what to show  type to search  Enter actions  Tab panels  F1 help  Esc quit",
         Focus::Actions => "←→ choose  Enter do it  ↑↓ back to list  Tab page  Esc back",
         Focus::Page => "↑↓ scroll  Space pause preview  Tab list  Esc back",
     };
@@ -590,34 +667,92 @@ fn draw_foot(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(Paragraph::new(line).style(Style::default().bg(theme::PANEL)), area);
 }
 
+/// F1: the keys, the menu row, and the font note from the design.
+fn help_text() -> Text<'static> {
+    let head = |s: &'static str| Line::from(Span::styled(s, Style::default().fg(theme::AMBER_SOFT).add_modifier(Modifier::BOLD)));
+    let key = |k: &'static str, what: &'static str| {
+        Line::from(vec![Span::styled(format!("  {k:<12}"), Style::default().fg(theme::GREEN_HI)), Span::raw(what)])
+    };
+    let text = |s: &'static str| Line::from(Span::styled(s, Style::default().fg(theme::TEXT)));
+    Text::from(vec![
+        head("Keys"),
+        key("↑ ↓", "move in the list; ↑ at its top opens the show card"),
+        key("type", "search names, topics, genres and developers"),
+        key("Enter", "the title's actions: install, play, wishlist"),
+        key("Tab", "move between the list, the actions and the page"),
+        key("Space", "show card: switch a box; page: pause the preview"),
+        key("F5", "fetch the catalog again"),
+        key("F1", "this help"),
+        key("Esc", "back one step; at the top, quit"),
+        Line::default(),
+        head("Menu row"),
+        text("  ● installed, ▲ updates and ♥ wishlisted: click one to show only"),
+        text("  those, click it again to show everything. ♥ support: how to help"),
+        text("  Asciiverse keep going."),
+        Line::default(),
+        head("Fonts"),
+        text("  Previews and some titles draw with Braille and Unicode block"),
+        text("  characters. If they look broken, switch your terminal to a font"),
+        text("  that has them."),
+        Line::default(),
+        head("From a shell"),
+        text("  av help lists the commands: install, play, update, search and more."),
+        Line::default(),
+        Line::from(Span::styled("any key to close", Style::default().fg(theme::FAINT))),
+    ])
+}
+
 fn centered(area: Rect, w: u16, h: u16) -> Rect {
     let w = w.min(area.width);
     let h = h.min(area.height);
     Rect { x: area.x + (area.width - w) / 2, y: area.y + (area.height - h) / 2, width: w, height: h }
 }
 
-fn draw_modal(f: &mut Frame, app: &App, m: &Modal, area: Rect) {
+/// Draws a dialog and returns where its buttons are, for clicks.
+fn draw_modal(f: &mut Frame, app: &App, m: &Modal, area: Rect) -> Vec<(Rect, Hit)> {
     let (title, body, w, h): (&str, Text, u16, u16) = match m {
         Modal::Quit => (" quit ", Text::from("Leave Asciiverse?\n\nEnter to quit, any other key to stay."), 44, 7),
+        Modal::Help => {
+            let text = help_text();
+            let h = text.lines.len() as u16 + 2;
+            (" help ", text, 76, h)
+        }
         Modal::Message(s) => (" note ", Text::from(format!("{s}\n\nany key to close")), 72, 6 + s.lines().count() as u16 + s.len() as u16 / 66),
         Modal::Choice { title, text, options, sel } => {
-            let mut lines: Vec<Line> = text.lines().map(|l| Line::from(l.to_string())).collect();
-            lines.push(Line::default());
+            let h = 6 + text.lines().count() as u16 + text.len() as u16 / 60;
+            let r = centered(area, 64, h);
+            let inner = modal_box(f, title, r);
+            // the text on top, then the buttons and the hint on fixed rows at
+            // the bottom, so each button's place is known for a click
+            let [body, _, row, _, hint] = Layout::vertical([
+                Constraint::Min(0),
+                Constraint::Length(1),
+                Constraint::Length(1),
+                Constraint::Length(1),
+                Constraint::Length(1),
+            ])
+            .areas(inner);
+            f.render_widget(Paragraph::new(text.as_str()).wrap(Wrap { trim: false }), body);
             let mut spans = Vec::new();
+            let mut hits = Vec::new();
+            let mut x = row.x;
             for (i, (label, _)) in options.iter().enumerate() {
                 let st = if i == *sel {
                     Style::default().fg(theme::BG).bg(theme::GREEN_HI).add_modifier(Modifier::BOLD)
                 } else {
                     Style::default().fg(theme::GREEN_HI).bg(theme::PANEL)
                 };
-                spans.push(Span::styled(format!(" {label} "), st));
+                let button = Span::styled(format!(" {label} "), st);
+                let w = button.width() as u16;
+                hits.push((Rect { x, y: row.y, width: w.min(row.right().saturating_sub(x)), height: 1 }.intersection(row), Hit::Choice(i)));
+                x = x.saturating_add(w + 2);
+                spans.push(button);
                 spans.push(Span::raw("  "));
             }
-            lines.push(Line::from(spans));
-            lines.push(Line::default());
-            lines.push(Line::from(Span::styled("arrows choose, Enter confirms, Esc cancels", Style::default().fg(theme::FAINT))));
-            let h = 6 + text.lines().count() as u16 + text.len() as u16 / 60;
-            (title.as_str(), Text::from(lines), 64, h)
+            f.render_widget(Paragraph::new(Line::from(spans)), row);
+            let tip = "click, or arrows and Enter; Esc cancels";
+            f.render_widget(Paragraph::new(Span::styled(tip, Style::default().fg(theme::FAINT))), hint);
+            return hits;
         }
         Modal::Uninstall { id } => {
             let name = app.titles.iter().find(|t| t.id == *id).map(|t| t.title.clone()).unwrap_or(id.clone());
@@ -639,12 +774,21 @@ fn draw_modal(f: &mut Frame, app: &App, m: &Modal, area: Rect) {
         }
     };
     let r = centered(area, w, h);
+    let inner = modal_box(f, title, r);
+    f.render_widget(Paragraph::new(body).wrap(Wrap { trim: false }), inner);
+    Vec::new()
+}
+
+/// A dialog's frame, drawn over whatever is under it; returns its inside.
+fn modal_box(f: &mut Frame, title: &str, r: Rect) -> Rect {
     f.render_widget(Clear, r);
     let b = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Double)
         .border_style(Style::default().fg(theme::AMBER))
-        .title(Span::styled(title, Style::default().fg(theme::AMBER)))
+        .title(Span::styled(title.to_string(), Style::default().fg(theme::AMBER)))
         .style(Style::default().bg(theme::PANEL_HI).fg(theme::TEXT_HI));
-    f.render_widget(Paragraph::new(body).wrap(Wrap { trim: false }).block(b), r);
+    let inner = b.inner(r);
+    f.render_widget(b, r);
+    inner
 }

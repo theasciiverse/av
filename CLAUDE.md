@@ -187,13 +187,19 @@ platform's cache folder, so deleting it is always safe.
 - **Layout:** menu row along the top, title list on the left, store-page
   style detail pane on the right (preview area, description, tags, news,
   developer info).
+- **Menu row** (built 2026-10-27): beside the wordmark, the player's library
+  on top (`● installed`, `▲ updates`, `♥ wishlisted`, in the list colors,
+  faint at zero; each a click shortcut to only those titles, a second click
+  back to everything) with the catalog count right-aligned ("showing N of
+  M" when narrowed). Below: the first running download with an eighth-step
+  bar ("+N more" for others), and `F1 help` and `♥ support` on the right.
 - **One list, not separate Store and Library tabs.** A type-to-filter
   search box matching title and `topics`, and under it the **show card**
   (David, 2026-10-27; it replaced the Catalog / Installed / Wishlist view
   tabs): folded, one line saying what the list shows; opened (↑ from the
   top of the list, or a click), a box per kind with its count, then
-  "only mine" boxes for Installed and Wishlisted (both ticked: installed
-  or wishlisted). Kinds combine freely. It is kept in the config bucket as
+  "only mine" boxes for Installed, Updates and Wishlisted (several ticked:
+  a title passing any of them). Kinds combine freely. It is kept in the config bucket as
   `show.json`, storing the kinds switched off so a kind new to the catalog
   shows up. Offline, Installed is ticked for that run only.
 - **List colors:** dark green = installed, dark red = update available,
@@ -205,7 +211,8 @@ platform's cache folder, so deleting it is always safe.
   explicit choice to keep or remove the title's save/config data. `av` needs
   a general modal overlay primitive for this and for the exit prompt.
 - **Downloads pane:** one place for progress, retry after failure and the
-  queue, which also covers "update all".
+  queue, which also covers "update all". Progress alone is in the menu row
+  for now; the pane with retry and the queue is not built.
 - **Keys:** arrow keys (no `hjkl` for now), `Tab` between panels, `Enter`
   selects, `Esc` backs out one step at a time; `Esc` at the top level asks
   before quitting.
@@ -218,8 +225,12 @@ platform's cache folder, so deleting it is always safe.
   both edges with cycling colors, then "ASCIIVERSE" appears as large
   ASCII-art text with a gradient rollover, then the welcome screen (first
   run) or the library. `artbox` does the lettering; the line is hand-rolled.
-- **Supporting the project:** Help/About links to the Asciiverse donation
-  page. A title's own `funding` link, if its manifest has one, shows in its
+- **Supporting the project:** `♥ support` in the menu row lists where
+  Asciiverse donations go and opens the chosen link in the browser
+  (`launch::open_url`: `xdg-open`, `open`, or `start`). The list is
+  `app::SUPPORT`, kept in step by hand with `SUPPORT` in the website's
+  `js/site.js` (GitHub Sponsors and Patreon; neither page exists yet). F1
+  help also carries the font note meant for the welcome screen. A title's own `funding` link, if its manifest has one, shows in its
   detail pane (proposed, see `../hub/catalog/SCHEMA.md`).
 - No achievements, notes or trading-card-style extras to begin with.
 
