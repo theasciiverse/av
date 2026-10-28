@@ -6,18 +6,19 @@ role to `hub`'s itch.io role: `hub` is the catalog and the website, `av` is
 the library and the launcher. Everything in the catalog reaches users through
 `av`.
 
-Status: design settled; first working cut built 2026-10-10 (catalog fetch
-and cache, list with views and filter, detail pane with the live `.cast`
-preview and page Markdown, install with sha256 check, uninstall, launch,
-wishlist, MUD connect in Lera, with telnet as the fallback; shell commands
-with a download bar, 2026-10-13; `.zip` extraction, CI and the release
-workflow, menu row, show card and downloads pane, 2026-10-27). No intro or
-welcome screen yet. Repo:
+Version 0.8.0 (2026-10-28): everything in the first pass works on Linux
+(catalog fetch and cache, the list with search and the show card, the detail
+pane with the live `.cast` preview and page Markdown, install, update and
+uninstall with the sha256 check, launch, wishlist, MUD connect in Lera with
+telnet as the fallback, the shell commands and tab completion, the menu row,
+the downloads pane, `.zip` extraction, CI and the release workflow). Not yet
+built: the welcome screen, the intro and news; never yet run on macOS or
+Windows. What comes next, release by release, is in `ROADMAP.md`. Repo:
 github.com/theasciiverse/av (private until launch). This file is the
 canonical design.
 
 Run it against the website mockup's catalog (served on 127.0.0.1:8765 from
-`websites/Asciiverse`, whose `dev/build_catalog.py` packages locally built
+`../hub/site`, whose `dev/build_catalog.py` packages locally built
 games as real archives):
 
 ```bash
@@ -33,7 +34,7 @@ developers.
 ## Releasing
 
 Bump `version` in `Cargo.toml`, commit, then push a matching tag
-(`git tag v0.1.0 && git push origin v0.1.0`). `.github/workflows/release.yml`
+(`git tag v0.8.0 && git push origin v0.8.0`). `.github/workflows/release.yml`
 builds the six targets the website's installers know
 (`{x86_64,aarch64}-unknown-linux-musl`, `-apple-darwin`, `-pc-windows-msvc`),
 packs `av-<target>.tar.gz` / `.zip` with `av` at the top beside `README.md`,
