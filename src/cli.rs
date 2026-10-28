@@ -367,7 +367,7 @@ impl Ctx {
                 Ok(())
             }
             Err(e) if t.connect.is_some() && e.kind() == std::io::ErrorKind::NotFound => {
-                bail!("neither Lera nor telnet is installed; install Lera with `av install lera`")
+                bail!("telnet is not installed; install a telnet client to connect to {}", t.title)
             }
             Err(e) => bail!("could not start {}: {e}", t.title),
         }
