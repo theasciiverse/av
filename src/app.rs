@@ -113,6 +113,9 @@ pub enum Action {
 pub enum Modal {
     Quit,
     Help,
+    /// what av is and how to start, shown once on the first run, and again with
+    /// W from help
+    Welcome,
     /// the downloads pane; its selection is `App::dl_sel`
     Downloads,
     Uninstall { id: String },
@@ -208,12 +211,25 @@ pub struct App {
     cast_tx: Sender<CastMsg>,
     cast_rx: Receiver<CastMsg>,
     last_tick: Instant,
+    /// when the intro started; None once it is over or skipped
+    pub intro: Option<Instant>,
+    /// the welcome screen waits for the intro to end
+    welcome_due: bool,
+}
+
+/// How long the intro runs, unless a key or click skips it.
+pub const INTRO_SECS: f64 = 2.6;
+
+/// The file whose presence says the welcome screen has been seen.
+fn welcomed_file(config: &std::path::Path) -> std::path::PathBuf {
+    config.join("welcomed")
 }
 
 impl App {
     pub fn new(paths: Paths, catalog_url: String) -> Self {
         let state = State::load(&paths.state);
         let show = Show::load(&paths.config);
+        let welcome_due = !welcomed_file(&paths.config).exists();
         let (tx, rx) = channel();
         let (cast_tx, cast_rx) = channel();
         let mut app = App {
@@ -248,6 +264,8 @@ impl App {
             cast_tx,
             cast_rx,
             last_tick: Instant::now(),
+            intro: Some(Instant::now()),
+            welcome_due,
         };
         app.refresh(false);
         app
@@ -577,6 +595,9 @@ impl App {
 
     /// Called every frame: drain worker messages, advance the preview.
     pub fn tick(&mut self) {
+        if self.intro.is_some_and(|t| t.elapsed().as_secs_f64() >= INTRO_SECS) {
+            self.end_intro();
+        }
         let dt = self.last_tick.elapsed().as_secs_f64();
         self.last_tick = Instant::now();
         while let Ok(p) = self.rx.try_recv() {
@@ -696,10 +717,38 @@ impl App {
         }
     }
 
+    /// The intro is over, run out or skipped: on to the welcome screen on the
+    /// first run (unless a note about the catalog is up), else the library.
+    fn end_intro(&mut self) {
+        if self.intro.take().is_none() {
+            return;
+        }
+        log::info!("intro over");
+        if self.welcome_due && self.modal.is_none() {
+            self.welcome();
+        }
+    }
+
+    /// Open the welcome screen, and remember it was seen.
+    pub fn welcome(&mut self) {
+        self.welcome_due = false;
+        self.modal = Some(Modal::Welcome);
+        let file = welcomed_file(&self.paths.config);
+        let saved = std::fs::create_dir_all(&self.paths.config).and_then(|_| std::fs::write(&file, crate::state::now_rfc3339()));
+        if let Err(e) = saved {
+            log::warn!("could not write {}: {e}", file.display());
+        }
+    }
+
     pub fn on_key(&mut self, k: KeyEvent) {
         log::debug!("key {:?} {:?} focus={:?} modal={}", k.code, k.modifiers, self.focus, self.modal.is_some());
         if k.code == KeyCode::Char('c') && k.modifiers.contains(KeyModifiers::CONTROL) {
             self.quit = true;
+            return;
+        }
+        // any key skips the intro, and does nothing else
+        if self.intro.is_some() {
+            self.end_intro();
             return;
         }
         if let Some(m) = self.modal.take() {
@@ -760,6 +809,12 @@ impl App {
         if !matches!(m.kind, MouseEventKind::Moved | MouseEventKind::Drag(_)) {
             log::debug!("mouse {:?} at {},{} hit {hit:?}", m.kind, m.column, m.row);
         }
+        if self.intro.is_some() {
+            if matches!(m.kind, MouseEventKind::Down(_)) {
+                self.end_intro();
+            }
+            return;
+        }
         if let Some(modal) = self.modal.take() {
             let down = matches!(m.kind, MouseEventKind::Down(_));
             match (modal, hit) {
@@ -770,7 +825,7 @@ impl App {
                     }
                 }
                 // a click closes a note; other dialogs stay open
-                (Modal::Message(_) | Modal::Help, _) if down => {}
+                (Modal::Message(_) | Modal::Help | Modal::Welcome, _) if down => {}
                 (modal, _) => self.modal = Some(modal),
             }
             return;
@@ -1021,7 +1076,9 @@ impl App {
                 KeyCode::Enter | KeyCode::Char('y') => self.quit = true,
                 _ => {}
             },
-            Modal::Message(_) | Modal::Help => {}
+            // W in help opens the welcome screen again; any other key closes it
+            Modal::Help if matches!(k.code, KeyCode::Char('w' | 'W')) => self.modal = Some(Modal::Welcome),
+            Modal::Message(_) | Modal::Help | Modal::Welcome => {}
             Modal::Downloads => self.downloads_key(k),
             Modal::Uninstall { id } => match k.code {
                 KeyCode::Left | KeyCode::Right | KeyCode::Up | KeyCode::Down => {

@@ -220,9 +220,165 @@ fn hex(b: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{carry_over, extract, find_exec};
+    use super::{Job, carry_over, extract, find_exec, run, uninstall};
+    use crate::catalog::{self, Title};
+    use std::collections::BTreeMap;
     use std::fs;
-    use std::io::Write;
+    use std::io::{BufRead, BufReader, Write};
+    use std::net::TcpListener;
+    use std::path::{Path, PathBuf};
+    use std::sync::mpsc::channel;
+
+    /// A tiny HTTP server on 127.0.0.1 that serves `files` by path, for as
+    /// long as the test runs. Returns its base URL.
+    fn serve(files: BTreeMap<String, Vec<u8>>) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { continue };
+                let mut line = String::new();
+                if BufReader::new(&stream).read_line(&mut line).is_err() {
+                    continue;
+                }
+                let path = line.split_whitespace().nth(1).unwrap_or("/").to_string();
+                let head = |status: &str, len: usize| format!("HTTP/1.1 {status}\r\nContent-Length: {len}\r\nConnection: close\r\n\r\n");
+                match files.get(&path) {
+                    Some(body) => {
+                        let _ = stream.write_all(head("200 OK", body.len()).as_bytes());
+                        let _ = stream.write_all(body);
+                    }
+                    None => {
+                        let _ = stream.write_all(head("404 Not Found", 0).as_bytes());
+                    }
+                }
+            }
+        });
+        base
+    }
+
+    /// A release archive as the catalog expects: the binary one folder down,
+    /// executable, beside a data file.
+    fn tar_gz(binary: &str, data: &str) -> Vec<u8> {
+        let mut out = tar::Builder::new(flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast()));
+        for (path, body, mode) in [("game/game", binary, 0o755), ("game/data.txt", data, 0o644)] {
+            let mut h = tar::Header::new_gnu();
+            h.set_size(body.len() as u64);
+            h.set_mode(mode);
+            h.set_cksum();
+            out.append_data(&mut h, path, body.as_bytes()).unwrap();
+        }
+        out.into_inner().unwrap().finish().unwrap()
+    }
+
+    fn sha(b: &[u8]) -> String {
+        use sha2::{Digest, Sha256};
+        super::hex(&Sha256::digest(b))
+    }
+
+    /// A catalog title for this machine, served from `url`, with `sha256`.
+    fn title(version: &str, url: &str, sha256: &str) -> Title {
+        let target = catalog::host_targets()[0];
+        let platform = format!(r#"{{"url": "{url}", "sha256": "{sha256}", "size": 0}}"#);
+        let json = format!(r#"{{"id": "game", "kind": "game", "version": "{version}", "platforms": {{"{target}": {platform}}}}}"#);
+        serde_json::from_str(&json).unwrap()
+    }
+
+    struct Home {
+        root: PathBuf,
+    }
+
+    impl Home {
+        fn new(name: &str) -> Home {
+            let root = std::env::temp_dir().join(format!("av-{name}-{}", std::process::id()));
+            let _ = fs::remove_dir_all(&root);
+            fs::create_dir_all(&root).unwrap();
+            Home { root }
+        }
+        fn dest(&self) -> PathBuf {
+            self.root.join("games/game")
+        }
+        fn bin(&self) -> PathBuf {
+            self.root.join("bin")
+        }
+        fn job(&self, title: Title, catalog_url: &str) -> Job {
+            Job { title, catalog_url: catalog_url.into(), cache: self.root.join("cache"), dest: self.dest(), bin: Some(self.bin()), cancel: None }
+        }
+    }
+
+    impl Drop for Home {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.root);
+        }
+    }
+
+    fn read(p: &Path) -> String {
+        fs::read_to_string(p).unwrap()
+    }
+
+    #[test]
+    fn install_update_and_uninstall_from_a_catalog() {
+        let (v1, v2) = (tar_gz("binary 1", "data 1"), tar_gz("binary 2", "data 2"));
+        let (sha1, sha2) = (sha(&v1), sha(&v2));
+        let base = serve(BTreeMap::from([("/r/game-1.tar.gz".to_string(), v1), ("/r/game-2.tar.gz".to_string(), v2)]));
+        let catalog_url = format!("{base}/data/catalog.json");
+        let home = Home::new("install");
+        let (tx, rx) = channel();
+
+        // install: the archive's url is relative to the catalog's host, as on the website
+        let done = run(&home.job(title("1.0", "/r/game-1.tar.gz", &sha1), &catalog_url), &tx).unwrap();
+        assert_eq!((done.version.as_str(), done.sha256.as_str()), ("1.0", sha1.as_str()));
+        let exe = home.dest().join("game/game");
+        assert_eq!(read(&exe), "binary 1");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_ne!(fs::metadata(&exe).unwrap().permissions().mode() & 0o111, 0, "the binary is executable");
+            assert_eq!(fs::read_link(home.bin().join("game")).unwrap(), exe);
+        }
+        assert!(rx.try_iter().any(|p| matches!(p, super::Progress::Status { msg, .. } if msg.starts_with("checksum ok"))));
+        assert!(!home.root.join("cache/downloads/game-1.tar.gz").exists(), "the archive is removed after installing");
+
+        // the title writes a save next to itself; an update keeps it
+        fs::write(home.dest().join("game/save.dat"), "my save").unwrap();
+        let done = run(&home.job(title("2.0", &format!("{base}/r/game-2.tar.gz"), &sha2), &catalog_url), &tx).unwrap();
+        assert_eq!(done.version, "2.0");
+        assert_eq!(read(&exe), "binary 2");
+        assert_eq!(read(&home.dest().join("game/data.txt")), "data 2");
+        assert_eq!(read(&home.dest().join("game/save.dat")), "my save");
+
+        uninstall(&home.dest(), Some(&home.bin()), "game").unwrap();
+        assert!(!home.dest().exists());
+        assert!(home.bin().join("game").symlink_metadata().is_err(), "the link is gone");
+    }
+
+    #[test]
+    fn a_download_that_does_not_match_its_checksum_is_not_installed() {
+        let archive = tar_gz("binary", "data");
+        let base = serve(BTreeMap::from([("/r/game.tar.gz".to_string(), archive)]));
+        let home = Home::new("checksum");
+        let (tx, _rx) = channel();
+        let wrong = "0".repeat(64);
+        let err = run(&home.job(title("1.0", "/r/game.tar.gz", &wrong), &format!("{base}/catalog.json")), &tx).unwrap_err();
+        assert!(err.to_string().starts_with("checksum mismatch"), "{err:#}");
+        assert!(!home.dest().exists(), "nothing is extracted");
+        assert!(!home.root.join("cache/downloads/game.tar.gz").exists(), "the bad download is deleted");
+        assert!(home.bin().join("game").symlink_metadata().is_err());
+    }
+
+    #[test]
+    fn a_failed_update_leaves_the_old_install_alone() {
+        let good = tar_gz("binary 1", "data 1");
+        let sha1 = sha(&good);
+        let base = serve(BTreeMap::from([("/r/game-1.tar.gz".to_string(), good)]));
+        let catalog_url = format!("{base}/catalog.json");
+        let home = Home::new("failed-update");
+        let (tx, _rx) = channel();
+        run(&home.job(title("1.0", "/r/game-1.tar.gz", &sha1), &catalog_url), &tx).unwrap();
+        // version 2's archive is missing from the server
+        assert!(run(&home.job(title("2.0", "/r/game-2.tar.gz", &sha1), &catalog_url), &tx).is_err());
+        assert_eq!(read(&home.dest().join("game/game")), "binary 1");
+    }
 
     #[test]
     fn zip_extracts_with_the_binary_one_folder_down() {

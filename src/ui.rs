@@ -21,6 +21,10 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     app.hits.clear();
     let area = f.area();
     f.render_widget(Block::default().style(Style::default().bg(theme::BG).fg(theme::TEXT)), area);
+    if let Some(start) = app.intro {
+        draw_intro(f.buffer_mut(), area, start.elapsed().as_secs_f64());
+        return;
+    }
     let [head, body, foot] = Layout::vertical([Constraint::Length(2), Constraint::Min(5), Constraint::Length(1)]).areas(area);
     draw_header(f, app, head);
     let [list, detail] = Layout::horizontal([Constraint::Length(LIST_W), Constraint::Min(20)]).areas(body);
@@ -465,7 +469,7 @@ fn draw_detail(f: &mut Frame, app: &mut App, t: &Title, area: Rect) {
         text.lines.extend(facts(app, t));
         text.lines.push(Line::default());
     }
-    text.lines.extend(page_text(t).lines);
+    text.lines.extend(page_text(t, app.state.installed.get(&t.id).map(|i| i.version.as_str())).lines);
     let page_w = if side_by_side { area.width.saturating_sub(1) } else { pw };
     Paragraph::new(text)
         .wrap(Wrap { trim: false })
@@ -637,10 +641,14 @@ fn facts(app: &App, t: &Title) -> Vec<Line<'static>> {
     lines
 }
 
-fn page_text(t: &Title) -> Text<'static> {
+/// How many releases' notes the page shows.
+const NEWS_SHOWN: usize = 3;
+
+fn page_text(t: &Title, installed: Option<&str>) -> Text<'static> {
     let mut text = Text::from(provenance(t));
     if !t.page.trim().is_empty() {
         text.lines.extend(md::render(&t.page).lines);
+        text.lines.extend(news(t, installed));
         return text;
     }
     let mut lines = vec![Line::from(Span::styled(t.description.clone(), Style::default().fg(theme::TEXT)))];
@@ -649,7 +657,39 @@ fn page_text(t: &Title) -> Text<'static> {
         lines.push(Line::from(Span::styled(t.topics.join("  ·  "), Style::default().fg(theme::FAINT))));
     }
     text.lines.extend(lines);
+    text.lines.extend(news(t, installed));
     text
+}
+
+/// NEWS under the page: the latest releases' notes, newest first; the ones
+/// newer than the installed version marked as what an update brings.
+fn news(t: &Title, installed: Option<&str>) -> Vec<Line<'static>> {
+    let shown: Vec<_> = t.news.iter().filter(|n| !n.notes.trim().is_empty()).take(NEWS_SHOWN).collect();
+    if shown.is_empty() {
+        return Vec::new();
+    }
+    let head = Style::default().fg(theme::DIM).add_modifier(Modifier::BOLD);
+    let mut lines = vec![Line::default(), Line::from(Span::styled("NEWS", head))];
+    // everything above the installed version is what an update brings
+    let mut newer = installed.is_some_and(|v| v != t.version);
+    for n in shown {
+        if installed == Some(n.version.as_str()) {
+            newer = false;
+        }
+        let mut spans = vec![Span::styled(n.version.clone(), Style::default().fg(theme::GREEN).add_modifier(Modifier::BOLD))];
+        if !n.date.is_empty() {
+            spans.push(Span::styled(format!("  {}", n.date), Style::default().fg(theme::FAINT)));
+        }
+        if newer {
+            spans.push(Span::styled("  new in the update", Style::default().fg(theme::UPDATE)));
+        } else if installed == Some(n.version.as_str()) {
+            spans.push(Span::styled("  installed", Style::default().fg(theme::INSTALLED)));
+        }
+        lines.push(Line::from(spans));
+        lines.extend(md::render(&n.notes).lines);
+        lines.push(Line::default());
+    }
+    lines
 }
 
 // Where it comes from, above the page: who made it, what we changed, and the links
@@ -824,6 +864,7 @@ fn help_text() -> Text<'static> {
         key("F2", "downloads: progress, the queue, retry, update all"),
         key("F5", "fetch the catalog again"),
         key("F1", "this help"),
+        key("W", "in this help: the welcome page again"),
         key("Esc", "back one step; at the top, quit"),
         Line::default(),
         head("Menu row"),
@@ -841,6 +882,148 @@ fn help_text() -> Text<'static> {
         Line::default(),
         Line::from(Span::styled("any key to close", Style::default().fg(theme::FAINT))),
     ])
+}
+
+/// The first run's page: what av is, how to start, where titles start from,
+/// and the font note. Shown once; W in help brings it back.
+fn welcome_text(bin: Option<&std::path::Path>, on_path: bool) -> Text<'static> {
+    let head = |s: &'static str| Line::from(Span::styled(s, Style::default().fg(theme::AMBER_SOFT).add_modifier(Modifier::BOLD)));
+    let key = |k: &'static str, what: &'static str| {
+        Line::from(vec![Span::styled(format!("  {k:<12}"), Style::default().fg(theme::GREEN_HI)), Span::raw(what)])
+    };
+    let text = |s: String| Line::from(Span::styled(s, Style::default().fg(theme::TEXT)));
+    let code = |s: &'static str| Line::from(Span::styled(s, Style::default().fg(theme::GREEN_HI)));
+    let mut lines = vec![
+        Line::from(Span::styled("Welcome to Asciiverse!", Style::default().fg(theme::AMBER).add_modifier(Modifier::BOLD))),
+        Line::default(),
+        text("  Games, text adventures, programs, art and MUDs for the terminal, in".into()),
+        text("  one list: browse them, watch them play, install and start them, all".into()),
+        text("  without leaving this window.".into()),
+        Line::default(),
+        head("Getting started"),
+        key("↑ ↓", "pick a title; its preview plays on the right"),
+        key("Enter", "Install, then Play"),
+        key("/ or type", "search"),
+        key("↑ at top", "choose what the list shows"),
+        key("F1", "help, any time"),
+        Line::default(),
+        head("Starting titles"),
+    ];
+    match bin {
+        Some(_) if on_path => {
+            lines.push(text("  Installed titles start from av, or from your shell by name.".into()));
+        }
+        Some(_) => {
+            lines.push(text("  Installed titles start from av, or with av play <title>. To start".into()));
+            lines.push(text("  them by name too, add this to your shell's startup file:".into()));
+            lines.push(code("    export PATH=\"$HOME/.local/bin:$PATH\""));
+        }
+        None => lines.push(text("  Installed titles start from av, or with av play <title>.".into())),
+    }
+    lines.push(text("  av never edits your shell's files and adds nothing to your menus.".into()));
+    lines.extend([
+        Line::default(),
+        head("Fonts"),
+        text("  Previews and some titles draw with Braille and Unicode block".into()),
+        text("  characters. If they look broken, switch your terminal to a font".into()),
+        text("  that has them.".into()),
+        Line::default(),
+        Line::from(Span::styled("any key to begin", Style::default().fg(theme::FAINT))),
+    ]);
+    Text::from(lines)
+}
+
+/// The wordmark as pixels: each half block is two pixels, top and bottom.
+fn logo_pixels() -> Vec<Vec<bool>> {
+    let mut rows = vec![Vec::new(); 4];
+    for (r, line) in LOGO.iter().enumerate() {
+        for c in line.chars() {
+            let (top, bottom) = match c {
+                '█' => (true, true),
+                '▀' => (true, false),
+                '▄' => (false, true),
+                _ => (false, false),
+            };
+            rows[r * 2].push(top);
+            rows[r * 2 + 1].push(bottom);
+        }
+    }
+    rows
+}
+
+/// A colour of the intro's line, cycling through the palette with `phase`.
+fn cycle(phase: f64) -> ratatui::style::Color {
+    let stops = [(0x7f, 0xdc, 0x5e), (0x5f, 0xbf, 0x45), (0xff, 0xb0, 0x00), (0xe9, 0xc2, 0x7a)];
+    let p = phase.rem_euclid(stops.len() as f64);
+    let (i, u) = (p as usize, p.fract());
+    let (a, b) = (stops[i], stops[(i + 1) % stops.len()]);
+    let mix = |p: u8, q: u8| (p as f64 + (q as f64 - p as f64) * u).round() as u8;
+    ratatui::style::Color::Rgb(mix(a.0, b.0), mix(a.1, b.1), mix(a.2, b.2))
+}
+
+/// The intro, `t` seconds in: a line grows in from both edges in cycling
+/// colours, then the wordmark appears large with a bright band rolling over
+/// its gradient, then the slogan. app::INTRO_SECS long; any key skips it.
+fn draw_intro(buf: &mut Buffer, area: Rect, t: f64) {
+    const GROW: f64 = 0.7;
+    let mid = area.y + area.height / 2;
+    let w = area.width as f64;
+    // the line: in from both edges until they meet, then it parts round the wordmark
+    if t < GROW + 0.4 {
+        let reach = ((t / GROW).min(1.0) * w / 2.0).ceil() as u16;
+        for i in 0..reach.min(area.width) {
+            let color = cycle(t * 3.0 + i as f64 / 8.0);
+            for x in [area.x + i, area.right().saturating_sub(1 + i)] {
+                buf[(x, mid)].set_symbol("━").set_fg(color);
+            }
+        }
+        return;
+    }
+    let pix = logo_pixels();
+    let (pw, ph) = (pix[0].len() as u16, pix.len() as u16);
+    // as large as fits: each pixel `s` cells wide and `s` half cells tall
+    let s = ((area.width.saturating_sub(4)) / pw).clamp(1, 3);
+    let (cw, ch) = (pw * s, (ph * s).div_ceil(2));
+    let x0 = area.x + area.width.saturating_sub(cw) / 2;
+    let y0 = mid.saturating_sub(ch / 2 + 1);
+    // the bright band sweeps across once, starting as the wordmark appears
+    let sweep = ((t - GROW - 0.4) / 1.0) * (cw as f64 + 20.0) - 10.0;
+    let lit = |px: u16, py: u16| -> bool {
+        let (x, y) = ((px / s) as usize, (py / s) as usize);
+        pix.get(y).and_then(|r| r.get(x)).copied().unwrap_or(false)
+    };
+    for cy in 0..ch {
+        for cx in 0..cw {
+            let (top, bottom) = (lit(cx, cy * 2), lit(cx, cy * 2 + 1));
+            let symbol = match (top, bottom) {
+                (true, true) => "█",
+                (true, false) => "▀",
+                (false, true) => "▄",
+                (false, false) => continue,
+            };
+            let base = logo_color(cx as usize, cw as usize);
+            let glow = (1.0 - ((cx as f64 - sweep).abs() / 6.0)).max(0.0);
+            let color = if let ratatui::style::Color::Rgb(r, g, b) = base {
+                let up = |c: u8| (c as f64 + (255.0 - c as f64) * glow * 0.85).round() as u8;
+                ratatui::style::Color::Rgb(up(r), up(g), up(b))
+            } else {
+                base
+            };
+            let (x, y) = (x0 + cx, y0 + cy);
+            if x < area.right() && y < area.bottom() {
+                buf[(x, y)].set_symbol(symbol).set_fg(color);
+            }
+        }
+    }
+    // the slogan, once the band has passed
+    if t > GROW + 1.2 {
+        let slogan = format!("{}   {}", SLOGAN[0], SLOGAN[1]);
+        let sw = slogan.chars().count() as u16;
+        let y = y0 + ch + 1;
+        if y < area.bottom() {
+            buf.set_string(area.x + area.width.saturating_sub(sw) / 2, y, slogan, Style::default().fg(theme::DIM));
+        }
+    }
 }
 
 fn centered(area: Rect, w: u16, h: u16) -> Rect {
@@ -863,6 +1046,11 @@ fn draw_modal(f: &mut Frame, app: &App, m: &Modal, area: Rect) -> Vec<(Rect, Hit
             let text = help_text();
             let h = text.lines.len() as u16 + 2;
             (" help ", text, 76, h)
+        }
+        Modal::Welcome => {
+            let text = welcome_text(app.paths.bin.as_deref(), app.paths.bin_on_path());
+            let h = text.lines.len() as u16 + 2;
+            (" welcome ", text, 76, h)
         }
         Modal::Message(s) => (" note ", Text::from(format!("{s}\n\nany key to close")), 72, 6 + s.lines().count() as u16 + s.len() as u16 / 66),
         Modal::Choice { title, text, options, sel } => {
@@ -938,4 +1126,58 @@ fn modal_box(f: &mut Frame, title: &str, r: Rect) -> Rect {
     let inner = b.inner(r);
     f.render_widget(b, r);
     inner
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn titled(version: &str, news: &[(&str, &str)]) -> Title {
+        let mut t = Title { version: version.into(), ..Title::default() };
+        t.news = news.iter().map(|(v, notes)| crate::catalog::News { version: (*v).into(), date: "2026-10-28".into(), notes: (*notes).into() }).collect();
+        t
+    }
+
+    fn plain(lines: &[Line]) -> Vec<String> {
+        lines.iter().map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect()).collect()
+    }
+
+    #[test]
+    fn news_marks_what_an_update_brings() {
+        let t = titled("1.2.0", &[("1.2.0", "Faster."), ("1.1.0", "Sound."), ("1.0.0", "First."), ("0.9.0", "Old.")]);
+        let text = plain(&news(&t, Some("1.1.0")));
+        assert!(text.contains(&"NEWS".to_string()));
+        assert!(text.contains(&"1.2.0  2026-10-28  new in the update".to_string()), "{text:?}");
+        assert!(text.contains(&"1.1.0  2026-10-28  installed".to_string()), "{text:?}");
+        assert!(text.contains(&"1.0.0  2026-10-28".to_string()), "{text:?}");
+        assert!(!text.iter().any(|l| l.starts_with("0.9.0")), "only the latest {NEWS_SHOWN}");
+        // not installed: nothing is marked; no notes: no NEWS at all
+        assert!(!plain(&news(&t, None)).iter().any(|l| l.contains("new in the update") || l.contains("installed")));
+        assert!(news(&titled("1.0.0", &[("1.0.0", " ")]), None).is_empty());
+    }
+
+    #[test]
+    fn help_and_welcome_fit_their_dialogs_without_wrapping() {
+        // 76 wide less the frame; a wrapped line would push the last one out of the box
+        let inner = 74;
+        let bin = std::path::Path::new("/home/someone/.local/bin");
+        for (bin, on_path) in [(Some(bin), false), (Some(bin), true), (None, false)] {
+            for text in [help_text(), welcome_text(bin, on_path)] {
+                for l in &text.lines {
+                    assert!(l.width() <= inner, "too wide ({}): {:?}", l.width(), plain(std::slice::from_ref(l)));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_intro_draws_at_every_moment_and_size() {
+        for (w, h) in [(140, 42), (80, 24), (20, 5), (1, 1)] {
+            let area = Rect::new(0, 0, w, h);
+            for i in 0..30 {
+                let mut buf = Buffer::empty(area);
+                draw_intro(&mut buf, area, i as f64 * crate::app::INTRO_SECS / 29.0);
+            }
+        }
+    }
 }

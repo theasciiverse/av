@@ -1,9 +1,9 @@
 # Roadmap
 
-av is at 0.8.0 (2026-10-28): the whole first pass works on Linux, from the
-catalog to playing a title. The welcome screen, the intro and news are still
-to come, and it has never run on macOS or Windows. 1.0.0 is when everything
-below is in and av has had its first public release.
+av is at 0.9.0 (2026-10-28): everything planned works on Linux, from the
+intro and the welcome screen to playing a title and reading its news. It
+has never run on macOS or Windows. 1.0.0 is when everything below is in
+and av has had its first public release.
 
 ## 0.8.0: built
 
@@ -24,14 +24,14 @@ below is in and av has had its first public release.
 - [x] Wishlist, help, ♥ support, session logging
 - [x] CI and the release workflow for six targets; licence MIT
 
-## 0.9.0: the first run
+## 0.9.0: built
 
-- [ ] The welcome screen, shown once and again from help: what av is, the
+- [x] The welcome screen, shown once and again from help: what av is, the
   PATH check, the note on fonts with Braille and block characters
-- [ ] The intro: the line growing in from both edges, then the ASCIIVERSE
+- [x] The intro: the line growing in from both edges, then the ASCIIVERSE
   lettering
-- [ ] News: a title's release notes and CHANGELOG in its page
-- [ ] Tests for install, update and uninstall against a local catalog,
+- [x] News: a title's release notes and CHANGELOG in its page
+- [x] Tests for install, update and uninstall against a local catalog,
   including a download whose checksum doesn't match
 
 ## 1.0.0

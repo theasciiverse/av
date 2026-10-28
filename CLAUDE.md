@@ -6,14 +6,13 @@ role to `hub`'s itch.io role: `hub` is the catalog and the website, `av` is
 the library and the launcher. Everything in the catalog reaches users through
 `av`.
 
-Version 0.8.0 (2026-10-28): everything in the first pass works on Linux
-(catalog fetch and cache, the list with search and the show card, the detail
-pane with the live `.cast` preview and page Markdown, install, update and
+Version 0.9.0 (2026-10-28): everything planned works on Linux (catalog
+fetch and cache, the list with search and the show card, the detail pane
+with the live `.cast` preview, page Markdown and news, install, update and
 uninstall with the sha256 check, launch, wishlist, MUD connect in Lera with
 telnet as the fallback, the shell commands and tab completion, the menu row,
-the downloads pane, `.zip` extraction, CI and the release workflow). Not yet
-built: the welcome screen, the intro and news; never yet run on macOS or
-Windows. What comes next, release by release, is in `ROADMAP.md`. Repo:
+the downloads pane, `.zip` extraction, the intro and the welcome screen, CI
+and the release workflow); never yet run on macOS or Windows. What comes next, release by release, is in `ROADMAP.md`. Repo:
 github.com/theasciiverse/av (private until launch). This file is the
 canonical design.
 
@@ -86,7 +85,6 @@ Rust + Ratatui, one binary crate, its own private git repo
 | Per-OS directories | `directories` 6.x (MIT OR Apache-2.0) | used directly, no wrapper |
 | `.cast` terminal emulation | `avt` 0.18 (Apache-2.0) | asciinema's own virtual terminal; `vt100` 0.16 (MIT) is the fallback |
 | `.cast` parsing | hand-written, `serde_json` | the `asciicast` crate (0.2.2) dates from 2018 and predates asciicast v3; the format is JSON lines, small enough to parse directly |
-| Intro logo | `artbox` 0.3 (MIT) | FIGlet-style text, built-in gradients, auto-scaling |
 | Logging | `log` + `env_logger` | per the session logging convention in `../CLAUDE.md` |
 | Page Markdown | `pulldown-cmark` 0.13 (MIT) | parses each title's `page`; `av` maps the allowed subset (`../hub/catalog/SCHEMA.md`) to Ratatui text |
 
@@ -235,12 +233,17 @@ platform's cache folder, so deleting it is always safe.
 - **Offline:** works from the cached catalog, defaulting to the "installed"
   view. Only installing and updating need a connection.
 - **Wishlist:** local only, `wishlist.json`, never synced.
-- **First run:** a welcome screen shown once (orientation, the PATH check),
-  reachable again from Help.
-- **Intro animation:** blank screen, then a horizontal line grows inward from
-  both edges with cycling colors, then "ASCIIVERSE" appears as large
-  ASCII-art text with a gradient rollover, then the welcome screen (first
-  run) or the library. `artbox` does the lettering; the line is hand-rolled.
+- **First run** (built 2026-10-28): a welcome screen shown once
+  (`ui::welcome_text`: what av is, the keys to start with, where titles
+  start from with the PATH line when `~/.local/bin` is missing, the font
+  note), remembered by a `welcomed` file in the config bucket; W in help
+  brings it back.
+- **Intro animation** (built 2026-10-28, `ui::draw_intro`, 2.6 s, any key or
+  click skips it): a line grows in from both edges in cycling colors, then
+  the half-block wordmark appears as large as fits (up to 3x) with a bright
+  band rolling over its green-to-amber gradient, then the slogan; then the
+  welcome screen (first run) or the library. The wordmark is scaled up from
+  the menu row's own, so `artbox` was not needed. Shown on every start.
 - **Supporting the project:** `♥ support` in the menu row lists where
   Asciiverse donations go and opens the chosen link in the browser
   (`launch::open_url`: `xdg-open`, `open`, or `start`). The list is
@@ -280,9 +283,13 @@ decide: a list-only fallback with the preview full screen on demand.
 - **Font is on the viewer's side.** A cast stores characters, not pixels.
   Titles using Braille or Unicode 16 block octants (`tty-rex`) only look
   right in a terminal font that has those glyphs; `av`'s welcome screen
-  should mention this.
-- **News / patch notes:** from the title's release notes (GitHub Release
-  body when `release.source = "github"`) plus its `CHANGELOG` where present.
+  and help say so.
+- **News / patch notes** (built 2026-10-28): the catalog's `news` (newest
+  first; see `../hub/catalog/SCHEMA.md`), the latest three under the page
+  as NEWS, the ones newer than the installed version marked "new in the
+  update"; `av info` prints the newest. hub's generator fills it from the
+  GitHub Release bodies; the mockup's `dev/build_catalog.py` stands in with
+  each game's ROADMAP section for its version, or its CHANGELOG.
 - **Ratings:** none to begin with (no server). GitHub star or reaction counts
   could be added at catalog build time later at no infrastructure cost.
 - Pixel-image rendering (`ratatui-image`, `mdfried`) is not needed; casts

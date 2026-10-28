@@ -519,6 +519,14 @@ impl Ctx {
         if let Some(p) = self.state.played.get(&t.id) {
             println!("{}{} over {} sessions", label("played"), crate::launch::duration(p.seconds), p.sessions);
         }
+        // the newest release's notes, as written (the page's Markdown reads fine as text)
+        if let Some(n) = t.news.iter().find(|n| !n.notes.trim().is_empty()) {
+            let date = if n.date.is_empty() { String::new() } else { format!(", {}", n.date) };
+            println!("\n{}{}{date}", label("news"), n.version);
+            for l in n.notes.trim().lines() {
+                println!("  {l}");
+            }
+        }
         Ok(())
     }
 }

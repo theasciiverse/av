@@ -74,6 +74,8 @@ pub struct Title {
     pub cast_url: Option<String>,
     pub thumbnail_at: Option<f64>,
     pub platforms: BTreeMap<String, Platform>,
+    /// release notes, newest first: the GitHub Release bodies, or the `CHANGELOG`
+    pub news: Vec<News>,
     // MUDs (proposed kind = "mud"): a world on someone's server
     pub connect: Option<Connect>,
     pub since: Option<u32>,
@@ -114,6 +116,16 @@ pub struct Requires {
     pub mouse: bool,
     pub gamepad: bool,
     pub glyphs: Vec<String>,
+}
+
+/// One release's notes, in the page's Markdown subset.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct News {
+    pub version: String,
+    /// `YYYY-MM-DD`, or empty
+    pub date: String,
+    pub notes: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
