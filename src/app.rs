@@ -210,6 +210,9 @@ pub struct App {
     rx: Receiver<Progress>,
     cast_tx: Sender<CastMsg>,
     cast_rx: Receiver<CastMsg>,
+    /// while offline ticks Installed for the run: the player's own setting,
+    /// which is what show.json keeps; None once they change it themselves
+    installed_saved: Option<bool>,
     /// the catalog being fetched in the background; None when not loading
     loading: Option<Receiver<anyhow::Result<catalog::Loaded>>>,
     last_tick: Instant,
@@ -265,6 +268,7 @@ impl App {
             rx,
             cast_tx,
             cast_rx,
+            installed_saved: None,
             loading: None,
             last_tick: Instant::now(),
             intro: Some(Instant::now()),
@@ -306,6 +310,7 @@ impl App {
                 self.offline = l.offline;
                 if l.offline {
                     // for this run only: show.json keeps the player's own choice
+                    self.installed_saved.get_or_insert(self.show.installed);
                     self.show.installed = true;
                     self.status = "offline: showing the cached catalog".into();
                 } else {
@@ -425,6 +430,7 @@ impl App {
         let want = (m == Mine::Installed, m == Mine::Updates, m == Mine::Wishlist);
         let now = (self.show.installed, self.show.updates, self.show.wishlist);
         (self.show.installed, self.show.updates, self.show.wishlist) = if now == want { (false, false, false) } else { want };
+        self.installed_saved = None;
         self.show_changed(keep);
     }
 
@@ -432,7 +438,11 @@ impl App {
     /// title selected when it is still in the list.
     fn show_changed(&mut self, keep: Option<String>) {
         log::info!("show {:?}", self.show);
-        if let Err(e) = self.show.save(&self.paths.config) {
+        let mut saved = self.show.clone();
+        if let Some(i) = self.installed_saved {
+            saved.installed = i;
+        }
+        if let Err(e) = saved.save(&self.paths.config) {
             self.status = format!("could not save what to show: {e:#}");
         }
         self.selected = keep.and_then(|id| self.visible().iter().position(|t| t.id == id)).unwrap_or(0);
@@ -580,7 +590,10 @@ impl App {
                     self.show.hidden.insert(k.clone());
                 }
             }
-            ShowRow::Installed => self.show.installed = !self.show.installed,
+            ShowRow::Installed => {
+                self.show.installed = !self.show.installed;
+                self.installed_saved = None;
+            }
             ShowRow::Updates => self.show.updates = !self.show.updates,
             ShowRow::Wishlist => self.show.wishlist = !self.show.wishlist,
         }
@@ -1171,6 +1184,38 @@ mod tests {
         assert_eq!(passes(&Show { installed: true, ..Default::default() }), ["old", "cur"]);
         // several "only mine" boxes: a title passing any of them
         assert_eq!(passes(&Show { updates: true, wishlist: true, ..Default::default() }), ["old", "wish"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn offline_installed_is_not_saved() {
+        let dir = std::env::temp_dir().join(format!("av-offline-{}", std::process::id()));
+        let paths = Paths { install: dir.join("data"), state: dir.join("data"), cache: dir.join("cache"), config: dir.join("config"), bin: None };
+        std::fs::create_dir_all(&paths.cache).unwrap();
+        let catalog = r#"{"schema_version":1,"titles":{"a":{"id":"a","title":"A","kind":"game"}}}"#;
+        std::fs::write(paths.cache.join("catalog.json"), catalog).unwrap();
+        // older than the cache's hour, so av tries the network first
+        let old = std::time::SystemTime::now() - std::time::Duration::from_secs(2 * 3600);
+        std::fs::File::options().write(true).open(paths.cache.join("catalog.json")).unwrap().set_modified(old).unwrap();
+        let saved = |app: &App| Show::load(&app.paths.config).installed;
+
+        // nothing listens on port 9, so the fetch fails and the cache is used
+        let mut app = App::new(paths, "http://127.0.0.1:9/catalog.json".into());
+        while app.is_loading() {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            app.tick();
+        }
+        assert!(app.offline && app.show.installed);
+        let all = app.show_rows().iter().position(|r| *r == ShowRow::All).unwrap();
+        let kind = app.show_rows().iter().position(|r| matches!(r, ShowRow::Kind(_))).unwrap();
+        app.toggle_show(kind);
+        assert!(app.show.installed && !saved(&app), "the offline tick leaked into show.json");
+        app.toggle_show(all);
+        // the player's own choice is saved as usual
+        let installed = app.show_rows().iter().position(|r| *r == ShowRow::Installed).unwrap();
+        app.toggle_show(installed);
+        app.toggle_show(installed);
+        assert!(app.show.installed && saved(&app));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
