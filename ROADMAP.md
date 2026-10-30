@@ -1,6 +1,6 @@
 # Roadmap
 
-av is at 0.9.7 (2026-10-30): everything planned works on Linux, from the
+av is at 0.9.8 (2026-10-30): everything planned works on Linux, from the
 intro and the welcome screen to playing a title and reading its news. It
 has never run on macOS or Windows. 1.0.0 is when everything below is in
 and av has had its first public release.
@@ -71,6 +71,17 @@ and av has had its first public release.
 
 - [x] "Update first" starts the version you have when the update can't be
   had, as when the network is down but the catalog was fresh
+
+## 0.9.8: built
+
+- [x] After the intro, a note when the terminal is smaller than 128x40,
+  following a resize as it happens
+- [x] av says when a newer av is out and how to update it: in the menu
+  row, in help, after a shell command, and when the catalog is too new to
+  read
+- [x] A log is always kept, and help, the README and the man page say
+  where to report a problem
+- [x] How to remove av, in the README and the man page
 
 ## 1.0.0
 
