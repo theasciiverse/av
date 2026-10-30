@@ -25,10 +25,14 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo install --locked cargo-about --features cli
       - run: cargo about generate dist/third-party.hbs -o THIRD-PARTY-LICENSES.txt
+      # the .deb's copyright file: the crates in the Linux builds, in Debian's format
+      - run: cargo about generate --format json --target x86_64-unknown-linux-musl --target aarch64-unknown-linux-musl | python3 dist/debian-copyright.py > copyright
       - uses: actions/upload-artifact@v4
         with:
           name: licenses
-          path: THIRD-PARTY-LICENSES.txt
+          path: |
+            THIRD-PARTY-LICENSES.txt
+            copyright
 
   build:
     needs: licenses
@@ -86,6 +90,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # the changelog dates each version by its tag
       - uses: actions/download-artifact@v4
         with:
           name: licenses
@@ -96,7 +102,7 @@ jobs:
       - name: Tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y librsvg2-bin binutils-aarch64-linux-gnu
+          sudo apt-get install -y librsvg2-bin binutils-aarch64-linux-gnu lintian
           cargo install --locked cargo-deb
       - name: Package
         run: |
@@ -104,11 +110,14 @@ jobs:
             mkdir -p target/$t/release
             tar -xzf av-$t.tar.gz -C target/$t/release ./av
           done
-          dist/deb-assets.sh target/x86_64-unknown-linux-musl/release/av THIRD-PARTY-LICENSES.txt
+          dist/deb-assets.sh target/x86_64-unknown-linux-musl/release/av copyright
           # fixed names, so the website and install.sh can link the latest
           cargo deb --no-build --target x86_64-unknown-linux-musl --output av_amd64.deb
           cargo deb --no-build --target aarch64-unknown-linux-musl --output av_arm64.deb
-          dpkg-deb --info av_*_amd64.deb
+          dist/deb-finish.sh av_amd64.deb
+          dist/deb-finish.sh av_arm64.deb
+          dpkg-deb --info av_amd64.deb
+          lintian --fail-on error,warning av_amd64.deb av_arm64.deb
       - uses: actions/upload-artifact@v4
         with:
           name: av-deb

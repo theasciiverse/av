@@ -1,0 +1,147 @@
+.TH AV 1 2026-10-30 "av" "User Commands"
+.SH NAME
+av \- the Asciiverse client: browse, install and play terminal games
+.SH SYNOPSIS
+.B av
+.br
+.B av
+.I command
+.RI [ arguments ]
+.SH DESCRIPTION
+.B av
+is the Asciiverse client: the whole catalog of text-mode games, programs,
+text adventures, art and MUDs in your terminal.
+Run alone, it opens the catalog and your library: one list on the left, and
+for the highlighted title its preview, store page and news on the right.
+From there titles are installed, updated, uninstalled and started.
+.PP
+Every download is checked against the sha256 in the catalog before it is
+unpacked.
+Updates are only ever started by you.
+.PP
+With a command,
+.B av
+does that one thing and exits.
+A
+.I title
+is its id, as in
+.BR "av install solitty" ,
+or its full name.
+.SH COMMANDS
+.TP
+.BI install " title" \fR...
+Install titles, or update them to the catalog's version.
+.TP
+.BR update " [\fItitle\fR...]"
+Update these titles, or every title with an update.
+.TP
+.BI uninstall " title" \fR...
+Remove titles. Their saves and settings are kept.
+.TP
+.BI play " title" " \fR[\fIargs\fR]"
+Start a title; extra arguments go after the catalog's own.
+For a MUD, connect to it.
+.TP
+.BR list " [" installed | updates | wishlist ]
+List the catalog, or part of it.
+.TP
+.BI search " words"
+Find titles by name, topic, genre or developer.
+.TP
+.BI info " title"
+Show a title's details and its newest news.
+.TP
+.BI completions " shell"
+Print tab completion for
+.BR bash ,
+.BR zsh ,
+.B fish
+or
+.BR powershell .
+The Debian package already installs it for bash, zsh and fish.
+.TP
+.B help
+Show the commands.
+.TP
+.B \-\-version
+Show av's version.
+.SH KEYS
+.TP
+.B \(ua \(da
+Move in the list; \(ua at its top opens the card that chooses what the
+list shows.
+.TP
+.BR / " or typing"
+Search names, topics, genres and developers.
+.TP
+.B Enter
+The title's actions: install, play, wishlist.
+.TP
+.B Tab
+Move between the list, the actions and the page.
+.TP
+.B Space
+In the show card, switch a box; on the page, pause the preview.
+.TP
+.B F1
+Help.
+.TP
+.B F2
+Downloads: progress, the queue, retry, and updates waiting.
+.TP
+.B F5
+Fetch the catalog again.
+.TP
+.B Esc
+Back one step; at the top, quit.
+.PP
+Dragging over a title's page copies its text.
+Shift and drag selects anything on the screen, the terminal's own way.
+.SH ENVIRONMENT
+.TP
+.B AV_CATALOG_URL
+Read the catalog from this address instead of Asciiverse's own.
+.TP
+.B RUST_LOG
+Log what av does to
+.IR ~/.cache/asciiverse/av.log ,
+for example
+.BR RUST_LOG=av=debug .
+.TP
+.B NO_COLOR
+The commands print without colors.
+.SH FILES
+.TP
+.I ~/.local/share/asciiverse/
+Installed titles, in
+.IR games/ ,
+.I programs/
+and
+.IR movies/ ,
+and the library:
+.I installed.json
+and
+.IR wishlist.json .
+.TP
+.I ~/.local/bin/
+Each installed title is linked here by its id, so it also starts by name.
+.TP
+.I ~/.cache/asciiverse/
+The catalog, downloads, previews and
+.IR av.log ;
+safe to delete.
+.TP
+.I ~/.config/asciiverse/
+av's own settings, such as what the list shows.
+.PP
+These follow
+.BR XDG_DATA_HOME ,
+.B XDG_CACHE_HOME
+and
+.B XDG_CONFIG_HOME
+when they are set.
+.SH EXIT STATUS
+0 on success, 1 when a command fails.
+.SH SEE ALSO
+.UR https://asciiverse.sh
+.UE
