@@ -179,6 +179,12 @@ fn draw_header(f: &mut Frame, app: &mut App, area: Rect) {
     if let Some(line) = download_line(app, dw as usize) {
         app.hits.push((Rect { x: bottom.x, y: bottom.y, width: (line.width() as u16).min(dw), height: 1 }, Hit::Downloads));
         f.render_widget(Paragraph::new(line), Rect { width: dw, ..bottom });
+    } else if let Some(v) = app.av_newer.as_ref().map(|r| r.version.clone()) {
+        // otherwise a newer av; a click says how to update
+        let label = format!("▲ av {v} is out");
+        let w = (label.chars().count() as u16).min(dw);
+        app.hits.push((Rect { x: bottom.x, y: bottom.y, width: w, height: 1 }, Hit::AvUpdate));
+        f.render_widget(Paragraph::new(Span::styled(label, Style::default().fg(theme::AMBER))), Rect { width: dw, ..bottom });
     }
 }
 
@@ -908,14 +914,21 @@ fn downloads_text(app: &App, w: usize) -> Text<'static> {
 }
 
 /// F1: the keys, the menu row, and the font note from the design.
-/// F1 help; `log` is av.log, named for problem reports.
-fn help_text(log: &std::path::Path) -> Text<'static> {
+/// F1 help; `log` is av.log, named for problem reports, and `newer` the
+/// latest av when this one is older.
+fn help_text(log: &std::path::Path, newer: Option<&crate::catalog::AvRelease>) -> Text<'static> {
     let head = |s: &'static str| Line::from(Span::styled(s, Style::default().fg(theme::AMBER_SOFT).add_modifier(Modifier::BOLD)));
     let key = |k: &'static str, what: &'static str| {
         Line::from(vec![Span::styled(format!("  {k:<12}"), Style::default().fg(theme::GREEN_HI)), Span::raw(what)])
     };
     let text = |s: &'static str| Line::from(Span::styled(s, Style::default().fg(theme::TEXT)));
-    Text::from(vec![
+    let mut lines = Vec::new();
+    if let Some(r) = newer {
+        lines.push(Line::from(Span::styled(format!("av {} is out. To update, run:", r.version), Style::default().fg(theme::AMBER).add_modifier(Modifier::BOLD))));
+        lines.push(Line::from(Span::styled(format!("  {}", crate::selfupdate::how()), Style::default().fg(theme::GREEN_HI))));
+        lines.push(Line::default());
+    }
+    lines.extend([
         head("Keys"),
         key("↑ ↓", "move in the list; ↑ at its top opens the show card"),
         key("/ or type", "search names, topics, genres and developers"),
@@ -950,7 +963,8 @@ fn help_text(log: &std::path::Path) -> Text<'static> {
         Line::from(Span::styled(format!("  {}", crate::paths::tilde(log)), Style::default().fg(theme::GREEN_HI))),
         Line::default(),
         Line::from(Span::styled("any key to close", Style::default().fg(theme::FAINT))),
-    ])
+    ]);
+    Text::from(lines)
 }
 
 /// The first run's page: what av is, how to start, where titles start from,
@@ -1112,7 +1126,7 @@ fn draw_modal(f: &mut Frame, app: &App, m: &Modal, area: Rect) -> Vec<(Rect, Hit
             (" downloads ", text, w, h)
         }
         Modal::Help => {
-            let text = help_text(&app.paths.cache.join("av.log"));
+            let text = help_text(&app.paths.cache.join("av.log"), app.av_newer.as_ref());
             let h = text.lines.len() as u16 + 2;
             (" help ", text, 76, h)
         }
@@ -1282,7 +1296,7 @@ mod tests {
                 std::path::Path::new("/home/someone/.cache/asciiverse/av.log"),
                 std::path::Path::new(r"C:\Users\someone.longer\AppData\Local\Asciiverse\cache\av.log"),
             ];
-            for text in logs.map(help_text).into_iter().chain([welcome_text(bin, on_path)]) {
+            for text in logs.map(|l| help_text(l, None)).into_iter().chain([welcome_text(bin, on_path)]) {
                 for l in &text.lines {
                     assert!(l.width() <= inner, "too wide ({}): {:?}", l.width(), plain(std::slice::from_ref(l)));
                 }

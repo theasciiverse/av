@@ -59,6 +59,8 @@ struct Ctx {
     url: String,
     color: bool,
     tty: bool,
+    /// the catalog's av when it is newer than this one
+    av_newer: Option<catalog::AvRelease>,
 }
 
 pub fn run(paths: Paths, url: String, args: Vec<String>) -> Result<()> {
@@ -95,13 +97,13 @@ pub fn run(paths: Paths, url: String, args: Vec<String>) -> Result<()> {
         }
         _ => {}
     }
-    let mut cx = Ctx { state: State::load(&paths.state), paths, titles: Vec::new(), collections: Default::default(), offline: false, url, color, tty };
+    let mut cx = Ctx { state: State::load(&paths.state), paths, titles: Vec::new(), collections: Default::default(), offline: false, url, color, tty, av_newer: None };
     let known = ["install", "update", "upgrade", "uninstall", "remove", "play", "run", "list", "ls", "search", "info", "show"];
     if !known.contains(&cmd) {
         bail!("unknown command {cmd:?}\n\n{USAGE}");
     }
     cx.load()?;
-    match cmd {
+    let done = match cmd {
         "install" => need(rest, "install <title>...").and_then(|_| cx.install(rest)),
         "update" | "upgrade" => cx.update(rest),
         "uninstall" | "remove" => need(rest, "uninstall <title>...").and_then(|_| cx.uninstall(rest)),
@@ -110,7 +112,12 @@ pub fn run(paths: Paths, url: String, args: Vec<String>) -> Result<()> {
         "search" => need(rest, "search <words>").and_then(|_| cx.search(&rest.join(" "))),
         "info" | "show" => need(rest, "info <title>").and_then(|_| cx.info(&rest[0])),
         _ => unreachable!(),
+    };
+    // on stderr, so a script reading the output is not disturbed
+    if let Some(r) = &cx.av_newer {
+        eprintln!("{}", cx.paint(crate::selfupdate::notice(r), theme::AMBER));
     }
+    done
 }
 
 fn need(rest: &[String], usage: &str) -> Result<()> {
@@ -144,6 +151,7 @@ impl Ctx {
 
     fn load(&mut self) -> Result<()> {
         let l = catalog::load(&self.url, &self.paths.cache, false)?;
+        self.av_newer = crate::selfupdate::newer(l.catalog.av.as_ref()).cloned();
         let mut titles: Vec<Title> = l.catalog.titles.into_values().collect();
         let rank = catalog::kind_rank;
         titles.sort_by(|a, b| (rank(&a.kind), a.title.to_lowercase()).cmp(&(rank(&b.kind), b.title.to_lowercase())));

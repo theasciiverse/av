@@ -38,6 +38,19 @@ pub struct Catalog {
     /// upstream projects holding several games, each game its own title
     #[serde(default)]
     pub collections: BTreeMap<String, Collection>,
+    /// the latest av, so an older one can say it is out of date
+    #[serde(default)]
+    pub av: Option<AvRelease>,
+}
+
+/// The catalog's top-level `av` entry: av's latest release.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct AvRelease {
+    pub version: String,
+    pub date: String,
+    /// what is new in it, in the page's Markdown subset
+    pub notes: String,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -242,9 +255,10 @@ fn parse(body: &str) -> Result<Catalog> {
     let head: Head = serde_json::from_str(body).context("catalog.json is not valid JSON")?;
     if head.schema_version != SCHEMA_VERSION {
         bail!(
-            "catalog schema_version {} is not one this av understands ({}); update av",
+            "the catalog is newer than this av understands (schema {}, av reads {}).\nUpdate av with:\n\n  {}",
             head.schema_version,
-            SCHEMA_VERSION
+            SCHEMA_VERSION,
+            crate::selfupdate::how()
         );
     }
     Ok(serde_json::from_str(body)?)
@@ -259,10 +273,14 @@ pub fn cached(cache_dir: &Path) -> Option<Catalog> {
 /// Fetch the catalog, using the cache when it is fresh and when offline.
 pub fn load(url: &str, cache_dir: &Path, force: bool) -> Result<Loaded> {
     let cache = cache_dir.join("catalog.json");
-    let fresh = std::fs::metadata(&cache)
-        .and_then(|m| m.modified())
-        .map(|t| SystemTime::now().duration_since(t).unwrap_or_default() < CACHE_TTL)
-        .unwrap_or(false);
+    // the address it came from: a cache of another catalog is never fresh
+    let from = cache_dir.join("catalog.url");
+    let same = std::fs::read_to_string(&from).is_ok_and(|u| u.trim() == url);
+    let fresh = same
+        && std::fs::metadata(&cache)
+            .and_then(|m| m.modified())
+            .map(|t| SystemTime::now().duration_since(t).unwrap_or_default() < CACHE_TTL)
+            .unwrap_or(false);
     if fresh && !force {
         let body = std::fs::read_to_string(&cache)?;
         log::info!("catalog from cache {}", cache.display());
@@ -272,6 +290,7 @@ pub fn load(url: &str, cache_dir: &Path, force: bool) -> Result<Loaded> {
         Ok(body) => {
             let catalog = parse(&body)?;
             std::fs::write(&cache, &body)?;
+            let _ = std::fs::write(&from, url);
             log::info!("catalog fetched from {url}: {} titles", catalog.titles.len());
             Ok(Loaded { catalog, offline: false })
         }
@@ -311,7 +330,17 @@ mod tests {
 
     #[test]
     fn refuses_unknown_schema() {
-        let e = parse(r#"{"schema_version": 2, "titles": {}}"#).unwrap_err();
-        assert!(e.to_string().contains("schema_version 2"));
+        let e = parse(r#"{"schema_version": 2, "titles": {}}"#).unwrap_err().to_string();
+        // it says which schema, and how to get an av that reads it
+        assert!(e.contains("schema 2"), "{e}");
+        assert!(e.contains("install") || e.contains("cargo"), "{e}");
+    }
+
+    #[test]
+    fn reads_the_latest_av() {
+        let c = parse(r#"{"schema_version": 1, "titles": {}, "av": {"version": "1.0.0", "notes": "- New"}}"#).unwrap();
+        assert_eq!(c.av.unwrap().version, "1.0.0");
+        // a catalog without the entry still reads
+        assert!(parse(r#"{"schema_version": 1, "titles": {}}"#).unwrap().av.is_none());
     }
 }

@@ -13,6 +13,7 @@ mod launch;
 mod libs;
 mod md;
 mod paths;
+mod selfupdate;
 mod state;
 mod theme;
 mod ui;

@@ -162,6 +162,8 @@ pub enum Hit {
     Mine(Mine),
     Help,
     Support,
+    /// the menu row's "av X is out"
+    AvUpdate,
     /// the menu row's download line and its F2 link
     Downloads,
     /// an action button, by index into `actions()`
@@ -226,6 +228,8 @@ pub struct App {
     cast_tx: Sender<CastMsg>,
     cast_rx: Receiver<CastMsg>,
     pub selection: Option<Selection>,
+    /// the catalog's av when it is newer than this one
+    pub av_newer: Option<catalog::AvRelease>,
     /// the title to start once its update is in ("Update first")
     play_after: Option<String>,
     /// the page column on screen and how far it is scrolled, from the last
@@ -300,6 +304,7 @@ impl App {
             cast_tx,
             cast_rx,
             selection: None,
+            av_newer: None,
             play_after: None,
             page_view: None,
             to_copy: None,
@@ -338,6 +343,10 @@ impl App {
     fn loaded(&mut self, res: anyhow::Result<catalog::Loaded>) {
         match res {
             Ok(l) => {
+                self.av_newer = crate::selfupdate::newer(l.catalog.av.as_ref()).cloned();
+                if let Some(r) = &self.av_newer {
+                    log::info!("av {} is out", r.version);
+                }
                 let mut titles: Vec<Title> = l.catalog.titles.into_values().collect();
                 // grouped by kind (catalog::kind_rank), alphabetical within each
                 let rank = catalog::kind_rank;
@@ -595,6 +604,22 @@ impl App {
         }
         self.dl_sel = self.dl_sel.min(self.pane_rows().len().saturating_sub(1));
         self.modal = Some(Modal::Downloads);
+    }
+
+    /// How to update av, and what the new one brings.
+    pub fn av_update(&mut self) {
+        let Some(r) = &self.av_newer else { return };
+        let mut text = format!(
+            "av {}{} is out; you have {}.\n\nTo update, run this in a terminal:\n\n  {}",
+            r.version,
+            if r.date.is_empty() { String::new() } else { format!(" ({})", r.date) },
+            env!("CARGO_PKG_VERSION"),
+            crate::selfupdate::how()
+        );
+        if !r.notes.trim().is_empty() {
+            text += &format!("\n\nWhat's new:\n{}", r.notes.trim());
+        }
+        self.modal = Some(Modal::Message(text));
     }
 
     fn support(&mut self) {
@@ -969,6 +994,7 @@ impl App {
             (MouseEventKind::Down(MouseButton::Left), Some(Hit::Mine(m))) => self.only(m),
             (MouseEventKind::Down(MouseButton::Left), Some(Hit::Help)) => self.modal = Some(Modal::Help),
             (MouseEventKind::Down(MouseButton::Left), Some(Hit::Support)) => self.support(),
+            (MouseEventKind::Down(MouseButton::Left), Some(Hit::AvUpdate)) => self.av_update(),
             (MouseEventKind::Down(MouseButton::Left), Some(Hit::Downloads)) => self.open_downloads(),
             (MouseEventKind::Down(MouseButton::Left), Some(Hit::ShowRow(i))) => {
                 self.focus = Focus::Show;
