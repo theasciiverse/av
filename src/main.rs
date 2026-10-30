@@ -9,6 +9,7 @@ mod downloads;
 mod glyphs;
 mod install;
 mod launch;
+mod libs;
 mod md;
 mod paths;
 mod state;

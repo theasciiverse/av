@@ -635,11 +635,16 @@ fn facts(app: &App, t: &Title) -> Vec<Line<'static>> {
             Span::styled(crate::glyphs::HELP_URL, Style::default().fg(theme::AMBER_SOFT).add_modifier(Modifier::UNDERLINED)),
         ]));
     }
-    if !t.system_deps.is_empty() {
-        lines.push(Line::from(Span::styled(
-            format!("Needs system packages: {}", t.system_deps.join(", ")),
-            Style::default().fg(theme::AMBER_SOFT),
-        )));
+    // only the libraries this machine lacks
+    let libs = crate::libs::missing(&t.system_deps);
+    if !libs.is_empty() {
+        lines.push(Line::from(vec![
+            Span::styled(format!("{:<11}", "Needs"), Style::default().fg(theme::FAINT)),
+            Span::styled(
+                format!("{} {}", if libs.len() == 1 { "system package" } else { "system packages" }, libs.join(", ")),
+                Style::default().fg(theme::AMBER_SOFT),
+            ),
+        ]));
     }
     if crate::catalog::pick_platform(t).is_none() && !t.platforms.is_empty() {
         lines.push(Line::from(Span::styled("No build for this platform", Style::default().fg(theme::UPDATE))));
