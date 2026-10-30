@@ -6,7 +6,7 @@ role to `hub`'s itch.io role: `hub` is the catalog and the website, `av` is
 the library and the launcher. Everything in the catalog reaches users through
 `av`.
 
-Version 0.9.5 (2026-10-30): everything planned works on Linux (catalog
+Version 0.9.6 (2026-10-30): everything planned works on Linux (catalog
 fetch and cache, the list with search and the show card, the detail pane
 with the live `.cast` preview, page Markdown and news, install, update and
 uninstall with the sha256 check, launch, wishlist, MUD connect in Lera with

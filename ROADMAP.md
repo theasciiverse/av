@@ -1,6 +1,6 @@
 # Roadmap
 
-av is at 0.9.5 (2026-10-30): everything planned works on Linux, from the
+av is at 0.9.6 (2026-10-30): everything planned works on Linux, from the
 intro and the welcome screen to playing a title and reading its news. It
 has never run on macOS or Windows. 1.0.0 is when everything below is in
 and av has had its first public release.
@@ -61,6 +61,12 @@ and av has had its first public release.
 - [x] The .deb as Debian expects it: a man page (man av), a changelog of
   every version, a copyright file naming each crate in av and its license,
   and md5sums; lintian finds nothing, even when pedantic
+
+## 0.9.6: built
+
+- [x] Play with an update waiting: offline it starts the installed version
+  at once; online "Update first" updates and then starts the game, and says
+  so when the update fails
 
 ## 1.0.0
 
