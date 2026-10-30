@@ -88,6 +88,25 @@ offline. Add the line for your shell:
 | fish | run once | `av completions fish > ~/.config/fish/completions/av.fish` |
 | PowerShell | `$PROFILE` | `av completions powershell \| Out-String \| Invoke-Expression` |
 
+## Removing av
+
+Titles first, if they should go too: `av uninstall <title>...` removes
+them and keeps their saves and settings. Then `av` itself, the way it was
+installed:
+
+- **The .deb:** `sudo apt remove av`.
+- **For you only, with the install line:** run the install line again and
+  pick "remove the av in ~/.local/bin", or `rm ~/.local/bin/av`.
+- **Windows:** delete `%LOCALAPPDATA%\Asciiverse\bin\av.exe`, and take
+  that folder out of your user PATH ("Edit environment variables for your
+  account").
+- **From source:** `cargo uninstall av`.
+
+That leaves your library, saves and settings. To remove those as well,
+delete the folders in the table below, the settings folder
+(`~/.config/asciiverse` on Linux, `%APPDATA%\Asciiverse` on Windows; on
+macOS it is the titles folder), and the titles' links in `~/.local/bin`.
+
 ## How it works
 
 There is no server and no account. `av` reads a static `catalog.json` that

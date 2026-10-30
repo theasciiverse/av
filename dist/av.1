@@ -140,6 +140,17 @@ These follow
 and
 .B XDG_CONFIG_HOME
 when they are set.
+.SH REMOVING AV
+.B av uninstall
+.I title
+removes a title and keeps its saves and settings.
+Installed from the Debian package,
+.B av
+itself goes with
+.BR "sudo apt remove av" .
+That leaves the library and settings in the folders under
+.BR FILES ;
+delete those to remove everything.
 .SH EXIT STATUS
 0 on success, 1 when a command fails.
 .SH SEE ALSO
