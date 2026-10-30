@@ -132,7 +132,8 @@ pub enum Then {
     Play { id: String, size_ok: bool },
     /// launch now, all checks done
     Launch(String),
-    Install(String),
+    /// update the title, then start it
+    UpdateThenPlay(String),
     /// open a link in the browser
     Open(String),
 }
@@ -222,6 +223,8 @@ pub struct App {
     cast_tx: Sender<CastMsg>,
     cast_rx: Receiver<CastMsg>,
     pub selection: Option<Selection>,
+    /// the title to start once its update is in ("Update first")
+    play_after: Option<String>,
     /// the page column on screen and how far it is scrolled, from the last
     /// frame, to place the mouse in it
     pub page_view: Option<(Rect, u16)>,
@@ -289,6 +292,7 @@ impl App {
             cast_tx,
             cast_rx,
             selection: None,
+            play_after: None,
             page_view: None,
             to_copy: None,
             copy_wanted: false,
@@ -672,6 +676,7 @@ impl App {
         }
         let dt = self.last_tick.elapsed().as_secs_f64();
         self.last_tick = Instant::now();
+        let mut start = None;
         while let Ok(p) = self.rx.try_recv() {
             match p {
                 Progress::Bytes { id, done, total } => {
@@ -695,6 +700,9 @@ impl App {
                         self.status += &format!("; {} is not on your PATH, so start it from av", crate::paths::tilde(b));
                     }
                     let current = self.current().is_some_and(|t| t.id == id);
+                    if self.play_after.as_deref() == Some(id.as_str()) {
+                        start = Some(id.clone());
+                    }
                     self.state.installed.insert(id, installed);
                     self.save();
                     if current {
@@ -708,9 +716,21 @@ impl App {
                     self.downloads.fail(&id, error);
                     let cancelled = self.downloads.list.iter().any(|d| d.id == id && d.phase == Phase::Cancelled);
                     self.status = if cancelled { format!("{id}: cancelled") } else { format!("{id}: install failed; F2 shows why") };
+                    if self.play_after.as_deref() == Some(id.as_str()) {
+                        self.play_after = None;
+                        let have = self.state.installed.get(&id).map(|i| i.version.clone()).unwrap_or_default();
+                        self.status = format!("{id}: the update failed (F2 shows why); Play starts {have}");
+                    }
                 }
             }
             self.pump();
+        }
+        // "Update first": the update is in, so on to the game
+        if let Some(id) = start {
+            self.play_after = None;
+            if let Some(t) = self.titles.iter().find(|t| t.id == id).cloned() {
+                self.request_play(&t, false);
+            }
         }
         while let Ok(CastMsg::Loaded(id, res)) = self.cast_rx.try_recv() {
             self.cast_loading.remove(&id);
@@ -1089,11 +1109,17 @@ impl App {
         }
         if !t.is_mud() && self.status_of(t) == Status::Update {
             let have = self.state.installed.get(&t.id).map(|i| i.version.clone()).unwrap_or_default();
+            if self.offline {
+                // no update to be had now: play what is installed
+                self.status = format!("offline: playing {} {have}; {} waits for a connection", t.title, t.version);
+                self.launch = Some(t.clone());
+                return;
+            }
             self.modal = Some(Modal::Choice {
                 title: " update available ".into(),
                 text: format!("{} {} is out; you have {have}.", t.title, t.version),
                 options: vec![
-                    ("Update first".into(), Then::Install(t.id.clone())),
+                    ("Update first".into(), Then::UpdateThenPlay(t.id.clone())),
                     (format!("Play {have}"), Then::Launch(t.id.clone())),
                 ],
                 sel: 0,
@@ -1113,8 +1139,9 @@ impl App {
                 }
             }
             Then::Launch(id) => self.launch = find(self, &id),
-            Then::Install(id) => {
+            Then::UpdateThenPlay(id) => {
                 if let Some(t) = find(self, &id) {
+                    self.play_after = Some(id);
                     self.run(Action::Install, &t);
                 }
             }
