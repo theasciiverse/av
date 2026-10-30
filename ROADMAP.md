@@ -1,6 +1,6 @@
 # Roadmap
 
-av is at 0.9.1 (2026-10-30): everything planned works on Linux, from the
+av is at 0.9.2 (2026-10-30): everything planned works on Linux, from the
 intro and the welcome screen to playing a title and reading its news. It
 has never run on macOS or Windows. 1.0.0 is when everything below is in
 and av has had its first public release.
@@ -40,6 +40,12 @@ and av has had its first public release.
   entry and icon, tab completion for bash, zsh and fish
 - [x] The catalog loads in the background while the intro plays, and every
   request gives up on a dead network instead of hanging
+
+## 0.9.2: built
+
+- [x] Font and system package notes only when this machine lacks them,
+  the font one with a link to the site
+- [x] Starting offline no longer leaves the list on installed titles only
 
 ## 1.0.0
 
