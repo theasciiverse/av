@@ -1,6 +1,6 @@
 # Roadmap
 
-av is at 0.9.9 (2026-10-30): everything planned works on Linux, from the
+av is at 0.9.10 (2026-10-30): everything planned works on Linux, from the
 intro and the welcome screen to playing a title and reading its news. It
 has never run on macOS or Windows. 1.0.0 is when everything below is in
 and av has had its first public release.
@@ -93,6 +93,12 @@ and av has had its first public release.
   programs' files in ~/.local/bin alone
 - [x] av comes back after a title even when the terminal is slow to answer
 - [x] Help and long notes scroll on small terminals
+
+## 0.9.10: built
+
+- [x] Titles that left the catalog stay in the list, under "No longer in
+  the catalog", to play or uninstall
+- [x] Searching and drawing the list does far less work each frame
 
 ## 1.0.0
 
