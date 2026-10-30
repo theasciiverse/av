@@ -6,7 +6,7 @@ role to `hub`'s itch.io role: `hub` is the catalog and the website, `av` is
 the library and the launcher. Everything in the catalog reaches users through
 `av`.
 
-Version 0.9.4 (2026-10-30): everything planned works on Linux (catalog
+Version 0.9.5 (2026-10-30): everything planned works on Linux (catalog
 fetch and cache, the list with search and the show card, the detail pane
 with the live `.cast` preview, page Markdown and news, install, update and
 uninstall with the sha256 check, launch, wishlist, MUD connect in Lera with
@@ -50,12 +50,28 @@ under `[package.metadata.deb]` in `Cargo.toml`; built 2026-10-30). The
 package puts `av` in `/usr/bin` (not `/usr/games`, which Debian leaves off
 root's and sudo's PATH; `dist/lintian-overrides` records that), the
 Asciiverse desktop entry (`dist/asciiverse.desktop`, `Terminal=true`) and
-icon (`dist/asciiverse.svg`, the wordmark's half-block A and an amber
-cursor, plus PNGs at 48, 128 and 256), the README, the licenses, and the
-bash, zsh and fish completions in the system completion folders.
-`dist/deb-assets.sh` makes the generated files. To build one here:
-`dist/deb-assets.sh target/release/av THIRD-PARTY-LICENSES.txt && cargo deb --no-build`
-(after `cargo about generate ...`). AppImage, snap and Flatpak are to follow.
+icon (`dist/asciiverse.svg`, "Av" in the wordmark's half blocks, green to
+amber, a cursor under the v, plus PNGs at 48, 128 and 256), the bash, zsh
+and fish completions in the system completion folders, and the
+documentation Debian expects: the man page `dist/av.1`, a changelog made
+from ROADMAP.md's "built" sections dated by their tags
+(`dist/debian-changelog.py`), and a copyright file in Debian's format
+listing every crate in the binary with its license
+(`dist/debian-copyright.py`, from `cargo about`'s JSON; SPDX's own license
+texts in `dist/licenses/`, Apache-2.0 and MPL-2.0 pointed to in
+`/usr/share/common-licenses`). `dist/deb-finish.sh` then drops the empty
+`Depends` cargo deb writes, adds `md5sums` and repacks; lintian passes with
+`--pedantic`, and the release fails on any lintian error or warning. To
+build one here, from the musl binary:
+
+```sh
+cargo about generate --format json --target x86_64-unknown-linux-musl --target aarch64-unknown-linux-musl | dist/debian-copyright.py > /tmp/copyright
+dist/deb-assets.sh target/x86_64-unknown-linux-musl/release/av /tmp/copyright
+cargo deb --no-build --target x86_64-unknown-linux-musl
+dist/deb-finish.sh target/x86_64-unknown-linux-musl/debian/av_*.deb
+```
+
+AppImage, snap and Flatpak are to follow.
 The website's `install.sh` reads `/etc/os-release` and looks in the
 release's `SHA256SUMS` for every package this machine can install (`.deb`
 where `dpkg` is, `.rpm` where `dnf`, `zypper` or `yum` is, once one
