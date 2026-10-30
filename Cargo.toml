@@ -3,7 +3,7 @@ name = "av"
 version = "0.9.0"
 edition = "2024"
 rust-version = "1.88"
-description = "The Asciiverse terminal client: browse, install and launch terminal games"
+description = "Asciiverse terminal client: browse, install and launch terminal games"
 license = "MIT"
 repository = "https://github.com/theasciiverse/av"
 homepage = "https://asciiverse.sh"
@@ -32,3 +32,31 @@ zip = { version = "9.1.2", default-features = false, features = ["deflate-flate2
 
 [profile.release]
 lto = "thin"
+
+# `cargo deb`, run by the release workflow on the musl builds; the generated
+# assets come from dist/deb-assets.sh
+[package.metadata.deb]
+name = "av"
+maintainer = "David Sandquist <sandquist@gmail.com>"
+copyright = "2026, David Sandquist"
+section = "games"
+priority = "optional"
+changelog = "target/deb-assets/changelog"
+extended-description = """\
+The Asciiverse client: the whole catalog of text-mode games, programs, text \
+adventures, art and MUDs in your terminal. Browse it, watch each title's \
+preview, then install, update and launch, in whatever terminal you already use."""
+assets = [
+    ["target/release/av", "usr/bin/", "755"],
+    ["README.md", "usr/share/doc/av/", "644"],
+    ["dist/lintian-overrides", "usr/share/lintian/overrides/av", "644"],
+    ["target/deb-assets/THIRD-PARTY-LICENSES.txt", "usr/share/doc/av/", "644"],
+    ["dist/asciiverse.desktop", "usr/share/applications/", "644"],
+    ["dist/asciiverse.svg", "usr/share/icons/hicolor/scalable/apps/", "644"],
+    ["target/deb-assets/48/asciiverse.png", "usr/share/icons/hicolor/48x48/apps/", "644"],
+    ["target/deb-assets/128/asciiverse.png", "usr/share/icons/hicolor/128x128/apps/", "644"],
+    ["target/deb-assets/256/asciiverse.png", "usr/share/icons/hicolor/256x256/apps/", "644"],
+    ["target/deb-assets/av.bash", "usr/share/bash-completion/completions/av", "644"],
+    ["target/deb-assets/_av", "usr/share/zsh/vendor-completions/", "644"],
+    ["target/deb-assets/av.fish", "usr/share/fish/vendor_completions.d/", "644"],
+]

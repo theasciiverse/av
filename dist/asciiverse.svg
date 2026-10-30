@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <!-- The Asciiverse icon: "Av" in the wordmark's half blocks (A from ▄▀█ over █▀█,
+       v the lower half of its V, ▀▄▀), green to amber like the wordmark, and a cursor -->
+  <defs>
+    <linearGradient id="glyph" x1="37" y1="0" x2="219" y2="0" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#7fdc5e"/>
+      <stop offset="0.45" stop-color="#5fbf45"/>
+      <stop offset="1" stop-color="#ffb000"/>
+    </linearGradient>
+    <radialGradient id="tile" cx="0.5" cy="0.42" r="0.7">
+      <stop offset="0" stop-color="#141c18"/>
+      <stop offset="1" stop-color="#06080b"/>
+    </radialGradient>
+    <filter id="glow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="6" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <pattern id="scan" width="4" height="4" patternUnits="userSpaceOnUse">
+      <rect width="4" height="1.5" fill="#000" opacity="0.3"/>
+    </pattern>
+    <clipPath id="round"><rect x="12" y="12" width="232" height="232" rx="44"/></clipPath>
+  </defs>
+  <rect x="12" y="12" width="232" height="232" rx="44" fill="url(#tile)"/>
+  <g filter="url(#glow)" fill="url(#glyph)">
+      <rect x="63" y="63" width="26.6" height="26.6"/>
+      <rect x="89" y="63" width="26.6" height="26.6"/>
+      <rect x="37" y="89" width="26.6" height="26.6"/>
+      <rect x="89" y="89" width="26.6" height="26.6"/>
+      <rect x="37" y="115" width="26.6" height="26.6"/>
+      <rect x="63" y="115" width="26.6" height="26.6"/>
+      <rect x="89" y="115" width="26.6" height="26.6"/>
+      <rect x="37" y="141" width="26.6" height="26.6"/>
+      <rect x="89" y="141" width="26.6" height="26.6"/>
+      <rect x="141" y="115" width="26.6" height="26.6"/>
+      <rect x="193" y="115" width="26.6" height="26.6"/>
+      <rect x="167" y="141" width="26.6" height="26.6"/>
+      <rect x="141" y="180.0" width="78" height="13.0"/>
+  </g>
+  <rect x="12" y="12" width="232" height="232" fill="url(#scan)" clip-path="url(#round)"/>
+  <rect x="13" y="13" width="230" height="230" rx="43" fill="none" stroke="#2a3a2c" stroke-width="2"/>
+</svg>

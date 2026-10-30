@@ -24,13 +24,16 @@ _av() {
 complete -o default -F _av av
 "#;
 
-const ZSH: &str = r#"# av tab completion for zsh; in ~/.zshrc, after compinit:  source <(av completions zsh)
+// The #compdef line and the funcstack test let the same file work sourced
+// and autoloaded from a completion folder on $fpath (the .deb puts it there).
+const ZSH: &str = r#"#compdef av
+# av tab completion for zsh; in ~/.zshrc, after compinit:  source <(av completions zsh)
 _av() {
     local -a c
     c=(${(f)"$(av __complete "${(@)words[2,CURRENT-1]}" 2>/dev/null)"})
     if (( ${#c} )); then compadd -a c; else _files; fi
 }
-compdef _av av
+if [[ $funcstack[1] == _av ]]; then _av "$@"; else compdef _av av; fi
 "#;
 
 const FISH: &str = r#"# av tab completion for fish:  av completions fish > ~/.config/fish/completions/av.fish

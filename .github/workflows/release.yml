@@ -1,7 +1,8 @@
 # Push a tag like v0.1.0 to build every target and open a draft GitHub
 # Release holding the archives the website's install.sh and install.ps1
 # fetch: av-<target>.tar.gz (av at the top), av-<target>.zip (av.exe at the
-# top) and SHA256SUMS. Publishing the draft is done by hand.
+# top), av_<version>-1_<arch>.deb and SHA256SUMS. Publishing the draft is
+# done by hand.
 name: Release
 
 on:
@@ -78,18 +79,53 @@ jobs:
           name: av-${{ matrix.target }}
           path: av-${{ matrix.target }}.*
 
-  release:
+  # av_<version>-1_{amd64,arm64}.deb from the musl builds above, with the
+  # desktop entry, icon and shell completions (config in Cargo.toml)
+  deb:
     needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: licenses
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: "av-*-linux-musl"
+          merge-multiple: true
+      - name: Tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y librsvg2-bin binutils-aarch64-linux-gnu
+          cargo install --locked cargo-deb
+      - name: Package
+        run: |
+          for t in x86_64-unknown-linux-musl aarch64-unknown-linux-musl; do
+            mkdir -p target/$t/release
+            tar -xzf av-$t.tar.gz -C target/$t/release ./av
+          done
+          dist/deb-assets.sh target/x86_64-unknown-linux-musl/release/av THIRD-PARTY-LICENSES.txt
+          for t in x86_64-unknown-linux-musl aarch64-unknown-linux-musl; do
+            cargo deb --no-build --target $t --output .
+          done
+          dpkg-deb --info av_*_amd64.deb
+      - uses: actions/upload-artifact@v4
+        with:
+          name: av-deb
+          path: av_*.deb
+
+  release:
+    needs: [build, deb]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/download-artifact@v4
         with:
-          pattern: av-*
+          pattern: "av-*"
           merge-multiple: true
-      - run: sha256sum av-* > SHA256SUMS && cat SHA256SUMS
+      - run: sha256sum av-* av_*.deb > SHA256SUMS && cat SHA256SUMS
       - name: Draft release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" av-* SHA256SUMS --repo "$GITHUB_REPOSITORY" --draft --title "av $GITHUB_REF_NAME" --generate-notes
+        run: gh release create "$GITHUB_REF_NAME" av-* av_*.deb SHA256SUMS --repo "$GITHUB_REPOSITORY" --draft --title "av $GITHUB_REF_NAME" --generate-notes

@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Asciiverse
+GenericName=Terminal Game Library
+Comment=Browse, install and play terminal games
+Exec=av
+Icon=asciiverse
+Terminal=true
+Categories=Game;
+Keywords=terminal;tui;ascii;games;roguelike;mud;text adventure;

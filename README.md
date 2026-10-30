@@ -25,6 +25,11 @@ take the archive for your system from the
 [latest release](https://github.com/theasciiverse/av/releases/latest) and
 put `av` (Windows: `av.exe`) somewhere on your PATH.
 
+Debian and Ubuntu: take `av_<version>-1_amd64.deb` (or `_arm64`) from the
+latest release and install it with `sudo apt install ./av_*.deb`. It also
+adds Asciiverse to the applications menu and sets up tab completion for
+bash, zsh and fish.
+
 From source, with Rust 1.88 or newer:
 
 ```sh
