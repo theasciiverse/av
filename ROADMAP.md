@@ -117,3 +117,11 @@ Not decided yet (see `CLAUDE.md`):
 - [ ] More than one library location
 - [ ] Launching movies
 - [ ] Paid titles
+- [ ] The BSDs, where many of these games were born (left for later,
+  2026-10-30). What was found: Rust ships FreeBSD (x86_64, aarch64) and
+  NetBSD targets, OpenBSD only through its own ports; the directories
+  crate gives BSDs the same XDG folders as Linux; av needs BSD triples in
+  catalog::host_targets, and its library and clipboard checks are
+  Linux-only. GitHub has no BSD runners, but cross-rs builds from Linux
+  and cross-platform-actions/action or vmactions/freebsd-vm test in a BSD
+  VM on its Linux runners. Each title would need its own BSD build too
