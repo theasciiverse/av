@@ -127,6 +127,7 @@ fn draw_header(f: &mut Frame, app: &mut App, area: Rect) {
         x += w + 2;
     }
     f.render_widget(Paragraph::new(Line::from(spans)), top);
+    let chips_end = x;
     let shown = app.visible().len();
     let count = if app.is_loading() && app.titles.is_empty() {
         Span::styled("loading the catalog", Style::default().fg(theme::DIM))
@@ -137,7 +138,10 @@ fn draw_header(f: &mut Frame, app: &mut App, area: Rect) {
     } else {
         Span::styled(format!("{} titles", app.titles.len()), Style::default().fg(theme::FAINT))
     };
-    f.render_widget(Paragraph::new(Line::from(count)).alignment(Alignment::Right), top);
+    // only beside the library, never over it, when the row is narrow
+    if chips_end + count.width() as u16 <= top.right() {
+        f.render_widget(Paragraph::new(Line::from(count)).alignment(Alignment::Right), top);
+    }
 
     // help, downloads and support on the right; downloads in red after a
     // failure, amber while something runs
@@ -1113,6 +1117,39 @@ fn draw_modal(f: &mut Frame, app: &App, m: &Modal, area: Rect) -> Vec<(Rect, Hit
             (" welcome ", text, 76, h)
         }
         Modal::Message(s) => (" note ", Text::from(format!("{s}\n\nany key to close")), 72, 6 + s.lines().count() as u16 + s.len() as u16 / 66),
+        Modal::Size => {
+            let (w, h) = (area.width, area.height);
+            let (mw, mh) = (crate::app::MIN_COLS, crate::app::MIN_ROWS);
+            let fits = w >= mw && h >= mh;
+            let size = Span::styled(format!("{w}x{h}"), Style::default().fg(if fits { theme::GREEN_HI } else { theme::AMBER }).add_modifier(Modifier::BOLD));
+            let mut lines = vec![
+                Line::from(format!("Asciiverse looks best at {mw}x{mh} or bigger: then every")),
+                Line::from("title's preview shows in full, with its buttons under it."),
+                Line::default(),
+            ];
+            if fits {
+                lines.push(Line::from(vec![Span::raw("This terminal is "), size, Span::raw(" now. That fits.")]));
+            } else {
+                lines.push(Line::from(vec![Span::raw("This terminal is "), size, Span::raw(". Make the window bigger, or")]));
+                lines.push(Line::from("the font smaller (Ctrl and -), and this follows along."));
+            }
+            let r = centered(area, 64, lines.len() as u16 + 6);
+            let inner = modal_box(f, " terminal size ", r);
+            let [body, _, row, _, hint] = Layout::vertical([
+                Constraint::Min(0),
+                Constraint::Length(1),
+                Constraint::Length(1),
+                Constraint::Length(1),
+                Constraint::Length(1),
+            ])
+            .areas(inner);
+            f.render_widget(Paragraph::new(lines), body);
+            let button = Span::styled(" Continue ", Style::default().fg(theme::BG).bg(theme::GREEN_HI).add_modifier(Modifier::BOLD));
+            let bw = button.width() as u16;
+            f.render_widget(Paragraph::new(button), row);
+            f.render_widget(Paragraph::new(Span::styled("Enter or a click to go on", Style::default().fg(theme::FAINT))), hint);
+            return vec![(Rect { width: bw.min(row.width), ..row }, Hit::Choice(0))];
+        }
         Modal::Choice { title, text, options, sel } => {
             let h = 6 + text.lines().count() as u16 + text.len() as u16 / 60;
             let r = centered(area, 64, h);

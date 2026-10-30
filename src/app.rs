@@ -120,6 +120,9 @@ pub enum Modal {
     Downloads,
     Uninstall { id: String },
     Message(String),
+    /// after the intro, when the terminal is smaller than av is made for;
+    /// drawn with the size as it is now, so it follows a resize
+    Size,
     /// a question with buttons, e.g. before launching
     Choice { title: String, text: String, options: Vec<(String, Then)>, sel: usize },
 }
@@ -244,6 +247,11 @@ pub struct App {
     /// the welcome screen waits for the intro to end
     welcome_due: bool,
 }
+
+/// The terminal size av is laid out for: the 102x32 preview, the list, and
+/// the title, its buttons and description under the preview.
+pub const MIN_COLS: u16 = 128;
+pub const MIN_ROWS: u16 = 40;
 
 /// How long the intro runs, unless a key or click skips it.
 pub const INTRO_SECS: f64 = 2.6;
@@ -667,6 +675,10 @@ impl App {
         if self.intro.is_some_and(|t| t.elapsed().as_secs_f64() >= INTRO_SECS) {
             self.end_intro();
         }
+        // the first-run welcome waits for whatever note came up after the intro
+        if self.welcome_due && self.intro.is_none() && self.modal.is_none() {
+            self.welcome();
+        }
         if let Some(text) = self.to_copy.take() {
             self.status = self.clipboard.copy(&text);
         }
@@ -820,7 +832,11 @@ impl App {
             return;
         }
         log::info!("intro over");
-        if self.welcome_due && self.modal.is_none() {
+        let small = ratatui::crossterm::terminal::size().is_ok_and(|(w, h)| w < MIN_COLS || h < MIN_ROWS);
+        if small && self.modal.is_none() {
+            // the welcome comes once this note is closed (see tick)
+            self.modal = Some(Modal::Size);
+        } else if self.welcome_due && self.modal.is_none() {
             self.welcome();
         }
     }
@@ -921,7 +937,7 @@ impl App {
                     }
                 }
                 // a click closes a note; other dialogs stay open
-                (Modal::Message(_) | Modal::Help | Modal::Welcome, _) if down => {}
+                (Modal::Message(_) | Modal::Help | Modal::Welcome | Modal::Size, _) if down => {}
                 (modal, _) => self.modal = Some(modal),
             }
             return;
@@ -1226,7 +1242,7 @@ impl App {
             },
             // W in help opens the welcome screen again; any other key closes it
             Modal::Help if matches!(k.code, KeyCode::Char('w' | 'W')) => self.modal = Some(Modal::Welcome),
-            Modal::Message(_) | Modal::Help | Modal::Welcome => {}
+            Modal::Message(_) | Modal::Help | Modal::Welcome | Modal::Size => {}
             Modal::Downloads => self.downloads_key(k),
             Modal::Uninstall { id } => match k.code {
                 KeyCode::Left | KeyCode::Right | KeyCode::Up | KeyCode::Down => {
