@@ -126,8 +126,15 @@ On Linux and macOS each installed title is also linked into `~/.local/bin`,
 so it can be started from the shell by its id. The cache is always safe to
 delete.
 
-`AV_CATALOG_URL` points `av` at another catalog, and `RUST_LOG=av=debug`
-writes a detailed log to `av.log` in the cache folder.
+`av` keeps a log, `av.log` in the cache folder (moved to `av.log.1` once it
+passes 1 MB). `RUST_LOG=av=debug` makes it record every key and click too,
+and `AV_CATALOG_URL` points `av` at another catalog.
+
+## Reporting a problem
+
+Open an issue at <https://github.com/theasciiverse/av/issues> and attach
+`av.log` from the cache folder above (Linux: `~/.cache/asciiverse/av.log`).
+If the problem is in a title, its own log is next to it, in `logs/`.
 
 ## Adding a title
 

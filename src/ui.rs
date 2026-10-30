@@ -908,7 +908,8 @@ fn downloads_text(app: &App, w: usize) -> Text<'static> {
 }
 
 /// F1: the keys, the menu row, and the font note from the design.
-fn help_text() -> Text<'static> {
+/// F1 help; `log` is av.log, named for problem reports.
+fn help_text(log: &std::path::Path) -> Text<'static> {
     let head = |s: &'static str| Line::from(Span::styled(s, Style::default().fg(theme::AMBER_SOFT).add_modifier(Modifier::BOLD)));
     let key = |k: &'static str, what: &'static str| {
         Line::from(vec![Span::styled(format!("  {k:<12}"), Style::default().fg(theme::GREEN_HI)), Span::raw(what)])
@@ -943,6 +944,10 @@ fn help_text() -> Text<'static> {
         Line::default(),
         head("From a shell"),
         text("  av help lists the commands: install, play, update, search and more."),
+        Line::default(),
+        head("Something wrong?"),
+        text("  Tell us at github.com/theasciiverse/av/issues, and add the log:"),
+        Line::from(Span::styled(format!("  {}", crate::paths::tilde(log)), Style::default().fg(theme::GREEN_HI))),
         Line::default(),
         Line::from(Span::styled("any key to close", Style::default().fg(theme::FAINT))),
     ])
@@ -1107,7 +1112,7 @@ fn draw_modal(f: &mut Frame, app: &App, m: &Modal, area: Rect) -> Vec<(Rect, Hit
             (" downloads ", text, w, h)
         }
         Modal::Help => {
-            let text = help_text();
+            let text = help_text(&app.paths.cache.join("av.log"));
             let h = text.lines.len() as u16 + 2;
             (" help ", text, 76, h)
         }
@@ -1273,7 +1278,11 @@ mod tests {
         let inner = 74;
         let bin = std::path::Path::new("/home/someone/.local/bin");
         for (bin, on_path) in [(Some(bin), false), (Some(bin), true), (None, false)] {
-            for text in [help_text(), welcome_text(bin, on_path)] {
+            let logs = [
+                std::path::Path::new("/home/someone/.cache/asciiverse/av.log"),
+                std::path::Path::new(r"C:\Users\someone.longer\AppData\Local\Asciiverse\cache\av.log"),
+            ];
+            for text in logs.map(help_text).into_iter().chain([welcome_text(bin, on_path)]) {
                 for l in &text.lines {
                     assert!(l.width() <= inner, "too wide ({}): {:?}", l.width(), plain(std::slice::from_ref(l)));
                 }

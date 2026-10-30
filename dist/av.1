@@ -103,10 +103,9 @@ Shift and drag selects anything on the screen, the terminal's own way.
 Read the catalog from this address instead of Asciiverse's own.
 .TP
 .B RUST_LOG
-Log what av does to
-.IR ~/.cache/asciiverse/av.log ,
-for example
-.BR RUST_LOG=av=debug .
+How much av writes to its log;
+.B RUST_LOG=av=debug
+adds every key and click.
 .TP
 .B NO_COLOR
 The commands print without colors.
@@ -127,8 +126,12 @@ and
 Each installed title is linked here by its id, so it also starts by name.
 .TP
 .I ~/.cache/asciiverse/
-The catalog, downloads, previews and
-.IR av.log ;
+The catalog, downloads, previews,
+.I av.log
+(moved to
+.I av.log.1
+past 1 MB) and each title's log in
+.IR logs/ ;
 safe to delete.
 .TP
 .I ~/.config/asciiverse/
@@ -151,6 +154,13 @@ itself goes with
 That leaves the library and settings in the folders under
 .BR FILES ;
 delete those to remove everything.
+.SH REPORTING BUGS
+At
+.UR https://github.com/theasciiverse/av/issues
+.UE ,
+with
+.I ~/.cache/asciiverse/av.log
+attached.
 .SH EXIT STATUS
 0 on success, 1 when a command fails.
 .SH SEE ALSO

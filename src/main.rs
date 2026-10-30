@@ -48,17 +48,22 @@ fn main() -> Result<()> {
     res
 }
 
-/// Session logging per the Asciiverse convention: with RUST_LOG set, every
-/// key, action and state change goes to av.log in the cache dir.
+/// Session logging per the Asciiverse convention, to av.log in the cache
+/// dir. Always on at info (actions, downloads, launches, failures), so a
+/// problem report can come with a log; RUST_LOG=av=debug adds every key and
+/// click. Past 1 MB at startup the log moves to av.log.1, one kept.
 fn init_logging(paths: &paths::Paths) {
-    if std::env::var_os("RUST_LOG").is_none() {
-        return;
-    }
     let file = paths.cache.join("av.log");
+    if std::fs::metadata(&file).is_ok_and(|m| m.len() > LOG_MAX) {
+        let _ = std::fs::rename(&file, paths.cache.join("av.log.1"));
+    }
+    let filter = std::env::var("RUST_LOG").unwrap_or_else(|_| "av=info".into());
     if let Ok(f) = std::fs::OpenOptions::new().create(true).append(true).open(&file) {
-        env_logger::Builder::from_default_env().target(env_logger::Target::Pipe(Box::new(f))).init();
+        env_logger::Builder::new().parse_filters(&filter).target(env_logger::Target::Pipe(Box::new(f))).init();
     }
 }
+
+const LOG_MAX: u64 = 1 << 20;
 
 fn run(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> Result<()> {
     let mut last_snapshot = std::time::Instant::now();
