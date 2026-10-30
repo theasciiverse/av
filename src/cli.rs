@@ -269,7 +269,7 @@ impl Ctx {
                 dest: dest.clone(),
                 saves: self.paths.saves(&t.id),
                 bin: self.paths.bin.clone(),
-                previous: Some(self.paths.installed_dir(&t, self.state.installed.get(&t.id))),
+                previous: Some(self.paths.installed_dir(t, self.state.installed.get(&t.id))),
                 cancel: None,
                 job: 0,
             },
