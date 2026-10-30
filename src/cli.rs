@@ -58,6 +58,8 @@ struct Ctx {
     offline: bool,
     url: String,
     color: bool,
+    /// colours on stderr
+    ecolor: bool,
     tty: bool,
     /// the catalog's av when it is newer than this one
     av_newer: Option<catalog::AvRelease>,
@@ -69,9 +71,15 @@ pub fn run(paths: Paths, url: String, args: Vec<String>) -> Result<()> {
     let ansi = ratatui::crossterm::ansi_support::supports_ansi();
     #[cfg(not(windows))]
     let ansi = true;
-    let color = tty && ansi && std::env::var_os("NO_COLOR").is_none_or(|v| v.is_empty());
+    let no_color = std::env::var_os("NO_COLOR").is_some_and(|v| !v.is_empty());
+    let color = tty && ansi && !no_color;
+    // stderr is its own question: `av install x 2>err.log` gets plain text there
+    let ecolor = std::io::stderr().is_terminal() && ansi && !no_color;
     let (cmd, rest) = (args[0].as_str(), &args[1..]);
-    log::info!("command {cmd} {rest:?}");
+    // its arguments (a title's own, a password among them) stay out of the
+    // log users attach to reports, unless asked for with RUST_LOG=av=debug
+    log::info!("command {cmd}");
+    log::debug!("arguments {rest:?}");
     match cmd {
         "help" | "-h" | "--help" => {
             println!("{USAGE}");
@@ -101,13 +109,18 @@ pub fn run(paths: Paths, url: String, args: Vec<String>) -> Result<()> {
     for f in &state.set_aside {
         eprintln!("av: could not read it, so set it aside: {f}");
     }
-    let mut cx = Ctx { state, paths, titles: Vec::new(), collections: Default::default(), offline: false, url, color, tty, av_newer: None };
+    let mut cx = Ctx { state, paths, titles: Vec::new(), collections: Default::default(), offline: false, url, color, ecolor, tty, av_newer: None };
     let known = ["install", "update", "upgrade", "uninstall", "remove", "play", "run", "list", "ls", "search", "info", "show"];
     if !known.contains(&cmd) {
         bail!("unknown command {cmd:?}\n\n{USAGE}");
     }
     cx.load()?;
-    let done = match cmd {
+    // first, on stderr: every way a command can end still shows it, and a
+    // script reading the output is not disturbed
+    if let Some(r) = &cx.av_newer {
+        eprintln!("{}", cx.epaint(crate::selfupdate::notice(r), theme::AMBER));
+    }
+    match cmd {
         "install" => need(rest, "install <title>...").and_then(|_| cx.install(rest)),
         "update" | "upgrade" => cx.update(rest),
         "uninstall" | "remove" => need(rest, "uninstall <title>...").and_then(|_| cx.uninstall(rest)),
@@ -116,12 +129,7 @@ pub fn run(paths: Paths, url: String, args: Vec<String>) -> Result<()> {
         "search" => need(rest, "search <words>").and_then(|_| cx.search(&rest.join(" "))),
         "info" | "show" => need(rest, "info <title>").and_then(|_| cx.info(&rest[0])),
         _ => unreachable!(),
-    };
-    // on stderr, so a script reading the output is not disturbed
-    if let Some(r) = &cx.av_newer {
-        eprintln!("{}", cx.paint(crate::selfupdate::notice(r), theme::AMBER));
     }
-    done
 }
 
 fn need(rest: &[String], usage: &str) -> Result<()> {
@@ -153,11 +161,16 @@ impl Ctx {
         if self.color { s.to_string().with(rgb(c)).to_string() } else { s.to_string() }
     }
 
+    /// The same for stderr, coloured by whether stderr is a terminal.
+    fn epaint(&self, s: impl std::fmt::Display, c: Color) -> String {
+        if self.ecolor { s.to_string().with(rgb(c)).to_string() } else { s.to_string() }
+    }
+
     fn load(&mut self) -> Result<()> {
         let l = catalog::load(&self.url, &self.paths.cache, false)?;
         self.av_newer = crate::selfupdate::newer(l.catalog.av.as_ref()).cloned();
         if let Some(msg) = &l.outdated {
-            eprintln!("{}", self.paint(format!("{msg}\nUntil then, av uses the last catalog it could read."), theme::AMBER));
+            eprintln!("{}", self.epaint(format!("{msg}\nUntil then, av uses the last catalog it could read."), theme::AMBER));
             // that says how to update already
             self.av_newer = None;
         }
@@ -168,7 +181,7 @@ impl Ctx {
         self.collections = l.catalog.collections;
         self.offline = l.offline;
         if l.offline {
-            eprintln!("{}", self.paint("offline: using the cached catalog", theme::AMBER));
+            eprintln!("{}", self.epaint("offline: using the cached catalog", theme::AMBER));
         }
         Ok(())
     }
@@ -195,7 +208,7 @@ impl Ctx {
         for name in names {
             let res = self.find(name).and_then(|t| self.install_one(&t, false));
             if let Err(e) = res {
-                eprintln!("{} {e:#}", self.paint("error:", theme::UPDATE));
+                eprintln!("{} {e:#}", self.epaint("error:", theme::UPDATE));
                 failed.push(name.clone());
             }
         }
@@ -221,7 +234,7 @@ impl Ctx {
         let mut failed = Vec::new();
         for t in &titles {
             if let Err(e) = self.install_one(t, true) {
-                eprintln!("{} {e:#}", self.paint("error:", theme::UPDATE));
+                eprintln!("{} {e:#}", self.epaint("error:", theme::UPDATE));
                 failed.push(t.id.clone());
             }
         }
@@ -320,7 +333,7 @@ impl Ctx {
             let low = name.to_lowercase();
             let id = self.find(name).map(|t| t.id).unwrap_or(low);
             let Some(i) = self.state.installed.get(&id).cloned() else {
-                eprintln!("{} {name} is not installed", self.paint("error:", theme::UPDATE));
+                eprintln!("{} {name} is not installed", self.epaint("error:", theme::UPDATE));
                 failed.push(name.clone());
                 continue;
             };
@@ -333,7 +346,7 @@ impl Ctx {
                     println!("uninstalled {id} {}; its saves and settings were kept", i.version);
                 }
                 Err(e) => {
-                    eprintln!("{} {id}: {e:#}", self.paint("error:", theme::UPDATE));
+                    eprintln!("{} {id}: {e:#}", self.epaint("error:", theme::UPDATE));
                     failed.push(name.clone());
                 }
             }
@@ -356,14 +369,14 @@ impl Ctx {
         {
             eprintln!(
                 "{}",
-                self.paint(format!("{} needs at least {}x{}; this terminal is {w}x{h}", t.title, m.cols, m.rows), theme::AMBER)
+                self.epaint(format!("{} needs at least {}x{}; this terminal is {w}x{h}", t.title, m.cols, m.rows), theme::AMBER)
             );
         }
         if !t.is_mud() && self.update_waiting(&t) {
             let have = &self.state.installed[&t.id].version;
             eprintln!(
                 "{}",
-                self.paint(format!("{} {} is out; you have {have}. Update with `av update {}`", t.title, t.version, t.id), theme::AMBER)
+                self.epaint(format!("{} {} is out; you have {have}. Update with `av update {}`", t.title, t.version, t.id), theme::AMBER)
             );
         }
         let (mut cmd, log) = crate::launch::command(&self.paths, &t, self.state.installed.get(&t.id)).map_err(anyhow::Error::msg)?;

@@ -924,7 +924,7 @@ fn help_text(log: &std::path::Path, newer: Option<&crate::catalog::AvRelease>) -
     let text = |s: &'static str| Line::from(Span::styled(s, Style::default().fg(theme::TEXT)));
     let mut lines = Vec::new();
     if let Some(r) = newer {
-        lines.push(Line::from(Span::styled(format!("av {} is out. To update, run:", r.version), Style::default().fg(theme::AMBER).add_modifier(Modifier::BOLD))));
+        lines.push(Line::from(Span::styled(format!("{}. To update, run:", crate::selfupdate::headline(r)), Style::default().fg(theme::AMBER).add_modifier(Modifier::BOLD))));
         lines.push(Line::from(Span::styled(format!("  {}", crate::selfupdate::how()), Style::default().fg(theme::GREEN_HI))));
         lines.push(Line::default());
     }
@@ -1126,7 +1126,7 @@ fn draw_modal(f: &mut Frame, app: &App, m: &Modal, area: Rect) -> Vec<(Rect, Hit
             (" downloads ", text, w, h)
         }
         Modal::Help => {
-            let text = help_text(&app.paths.cache.join("av.log"), app.av_newer.as_ref());
+            let text = help_text(&app.paths.log(), app.av_newer.as_ref());
             let h = text.lines.len() as u16 + 2;
             (" help ", text, 76, h)
         }
@@ -1135,38 +1135,66 @@ fn draw_modal(f: &mut Frame, app: &App, m: &Modal, area: Rect) -> Vec<(Rect, Hit
             let h = text.lines.len() as u16 + 2;
             (" welcome ", text, 76, h)
         }
-        Modal::Message(s) => (" note ", Text::from(format!("{s}\n\nany key to close")), 72, 6 + s.lines().count() as u16 + s.len() as u16 / 66),
+        Modal::Message(s) => {
+            let text = Text::from(format!("{s}\n\nany key to close"));
+            let h = wrapped_height(&text, 70) + 2;
+            (" note ", text, 72, h)
+        }
+        Modal::AvUpdate => {
+            let Some(r) = &app.av_newer else { return Vec::new() };
+            let mut lines = vec![
+                Line::from(Span::styled(format!("{}.", crate::selfupdate::headline(r)), Style::default().fg(theme::AMBER).add_modifier(Modifier::BOLD))),
+                Line::default(),
+                Line::from("To update, run this in a terminal:"),
+                Line::from(Span::styled(format!("  {}", crate::selfupdate::how()), Style::default().fg(theme::GREEN_HI))),
+            ];
+            if !r.notes.trim().is_empty() {
+                lines.extend([Line::default(), Line::from(Span::styled("What's new", Style::default().fg(theme::AMBER_SOFT).add_modifier(Modifier::BOLD)))]);
+                lines.extend(crate::md::render(&r.notes).lines);
+            }
+            lines.extend([Line::default(), Line::from(Span::styled("any key to close", Style::default().fg(theme::FAINT)))]);
+            let text = Text::from(lines);
+            let h = wrapped_height(&text, 72) + 2;
+            (" av update ", text, 76, h)
+        }
         Modal::Size => {
             let (w, h) = (area.width, area.height);
             let (mw, mh) = (crate::app::MIN_COLS, crate::app::MIN_ROWS);
             let fits = w >= mw && h >= mh;
             let size = Span::styled(format!("{w}x{h}"), Style::default().fg(if fits { theme::GREEN_HI } else { theme::AMBER }).add_modifier(Modifier::BOLD));
-            let mut lines = vec![
-                Line::from(format!("Asciiverse looks best at {mw}x{mh} or bigger: then every")),
-                Line::from("title's preview shows in full, with its buttons under it."),
-                Line::default(),
-            ];
-            if fits {
-                lines.push(Line::from(vec![Span::raw("This terminal is "), size, Span::raw(" now. That fits.")]));
+            // one paragraph each, so they wrap on any width; this terminal's
+            // size first, so a very short one still shows what matters
+            let mut lines = if fits {
+                vec![Line::from(vec![Span::raw("This terminal is "), size, Span::raw(format!(" now. That fits: Asciiverse looks best at {mw}x{mh} or bigger."))])]
             } else {
-                lines.push(Line::from(vec![Span::raw("This terminal is "), size, Span::raw(". Make the window bigger, or")]));
-                lines.push(Line::from("the font smaller (Ctrl and -), and this follows along."));
-            }
-            let r = centered(area, 64, lines.len() as u16 + 6);
+                vec![
+                    Line::from(vec![Span::raw("This terminal is "), size, Span::raw(format!(". Asciiverse looks best at {mw}x{mh} or bigger."))]),
+                    Line::from("Make the window bigger, or the font smaller (Ctrl and -), and this follows along."),
+                ]
+            };
+            lines.extend([Line::default(), Line::from("At that size every title's preview shows in full, with its buttons under it.")]);
+            // wrapped, so it reads on the narrow terminals it is written for
+            let text = Text::from(lines);
+            let inner_w = 62.min(area.width.saturating_sub(2));
+            let body_h = wrapped_height(&text, inner_w);
+            let roomy = area.height >= body_h + 6;
+            let r = centered(area, 64, body_h + if roomy { 6 } else { 3 });
             let inner = modal_box(f, " terminal size ", r);
-            let [body, _, row, _, hint] = Layout::vertical([
-                Constraint::Min(0),
-                Constraint::Length(1),
-                Constraint::Length(1),
-                Constraint::Length(1),
-                Constraint::Length(1),
-            ])
-            .areas(inner);
-            f.render_widget(Paragraph::new(lines), body);
+            // on a very short one, the text and the button come first
+            let (body, row, hint) = if roomy {
+                let [body, _, row, _, hint] = Layout::vertical([Constraint::Min(0), Constraint::Length(1), Constraint::Length(1), Constraint::Length(1), Constraint::Length(1)]).areas(inner);
+                (body, row, Some(hint))
+            } else {
+                let [body, row] = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(inner);
+                (body, row, None)
+            };
+            f.render_widget(Paragraph::new(text).wrap(Wrap { trim: false }), body);
             let button = Span::styled(" Continue ", Style::default().fg(theme::BG).bg(theme::GREEN_HI).add_modifier(Modifier::BOLD));
             let bw = button.width() as u16;
             f.render_widget(Paragraph::new(button), row);
-            f.render_widget(Paragraph::new(Span::styled("Enter or a click to go on", Style::default().fg(theme::FAINT))), hint);
+            if let Some(hint) = hint {
+                f.render_widget(Paragraph::new(Span::styled("Enter or a click to go on", Style::default().fg(theme::FAINT))), hint);
+            }
             return vec![(Rect { width: bw.min(row.width), ..row }, Hit::Choice(0))];
         }
         Modal::Choice { title, text, options, sel } => {
@@ -1226,8 +1254,27 @@ fn draw_modal(f: &mut Frame, app: &App, m: &Modal, area: Rect) -> Vec<(Rect, Hit
     };
     let r = centered(area, w, h);
     let inner = modal_box(f, title, r);
-    f.render_widget(Paragraph::new(body).wrap(Wrap { trim: false }), inner);
+    // taller than the screen: it scrolls, and the last row says so
+    let full = wrapped_height(&body, inner.width);
+    let max = full.saturating_sub(inner.height.saturating_sub(1));
+    let tall = full > inner.height;
+    app.modal_scroll_max.set(if tall { max } else { 0 });
+    if tall {
+        let [text, hint] = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(inner);
+        let top = app.modal_scroll.min(max);
+        f.render_widget(Paragraph::new(body).wrap(Wrap { trim: false }).scroll((top, 0)), text);
+        let more = format!("↑↓ PgUp PgDn to scroll ({} of {} lines)", (top + text.height).min(full), full);
+        f.render_widget(Paragraph::new(Span::styled(more, Style::default().fg(theme::AMBER))), hint);
+    } else {
+        f.render_widget(Paragraph::new(body).wrap(Wrap { trim: false }), inner);
+    }
     Vec::new()
+}
+
+/// How many rows `text` takes wrapped at `width`, counted the way the
+/// paragraph wraps it (ratatui's rendered-line-info feature).
+fn wrapped_height(text: &Text, width: u16) -> u16 {
+    Paragraph::new(text.clone()).wrap(Wrap { trim: false }).line_count(width.max(1)) as u16
 }
 
 /// A dialog's frame, drawn over whatever is under it; returns its inside.
@@ -1247,6 +1294,65 @@ fn modal_box(f: &mut Frame, title: &str, r: Rect) -> Rect {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::App;
+    use crate::paths::Paths;
+    use ratatui::backend::TestBackend;
+
+    /// An App over empty folders, for drawing dialogs.
+    fn app(name: &str) -> App {
+        let dir = std::env::temp_dir().join(format!("av-ui-{name}-{}", std::process::id()));
+        let paths = Paths { install: dir.join("data"), state: dir.join("data"), cache: dir.join("cache"), config: dir.join("config"), bin: None };
+        std::fs::create_dir_all(&paths.cache).unwrap();
+        App::new(paths, "http://127.0.0.1:9/catalog.json".into())
+    }
+
+    /// The screen's text after drawing `m` at `w`x`h`.
+    fn draw_note(app: &App, m: &Modal, w: u16, h: u16) -> Vec<String> {
+        let mut t = ratatui::Terminal::new(TestBackend::new(w, h)).unwrap();
+        t.draw(|f| {
+            draw_modal(f, app, m, f.area());
+        })
+        .unwrap();
+        let buf = t.backend().buffer().clone();
+        (0..h).map(|y| (0..w).map(|x| buf[(x, y)].symbol()).collect::<String>()).collect()
+    }
+
+    #[test]
+    fn help_scrolls_on_a_small_terminal() {
+        let mut a = app("help");
+        let rows = draw_note(&a, &Modal::Help, 80, 24);
+        assert!(rows.iter().any(|r| r.contains("to scroll")), "says it scrolls");
+        assert!(!rows.iter().any(|r| r.contains("any key to close")), "the end is below");
+        a.modal_scroll = a.modal_scroll_max.get();
+        let rows = draw_note(&a, &Modal::Help, 80, 24);
+        assert!(rows.iter().any(|r| r.contains("Something wrong?")) || rows.iter().any(|r| r.contains("any key to close")), "scrolled to the end: {rows:#?}");
+        assert!(rows.iter().any(|r| r.contains("any key to close")));
+        // tall enough: no scrolling
+        let rows = draw_note(&a, &Modal::Help, 80, 60);
+        assert!(!rows.iter().any(|r| r.contains("to scroll")));
+        assert!(rows.iter().any(|r| r.contains("any key to close")));
+    }
+
+    #[test]
+    fn the_size_note_reads_on_small_terminals() {
+        let a = app("size");
+        for (w, h) in [(60, 12), (50, 8), (128, 40)] {
+            let rows = draw_note(&a, &Modal::Size, w, h).join("\n");
+            assert!(rows.contains("Continue"), "{w}x{h}: the button shows\n{rows}");
+            assert!(rows.contains("128x40"), "{w}x{h}: the size it wants shows\n{rows}");
+            assert!(rows.contains(&format!("{w}x{h}")), "{w}x{h}: this terminal's size shows\n{rows}");
+        }
+    }
+
+    #[test]
+    fn release_notes_are_rendered_not_raw() {
+        let mut a = app("notes");
+        a.av_newer = Some(crate::catalog::AvRelease { version: "9.9.9".into(), date: String::new(), notes: "- **Bold** and `code`".into() });
+        let rows = draw_note(&a, &Modal::AvUpdate, 100, 30).join("\n");
+        assert!(rows.contains("av 9.9.9 is out"));
+        assert!(rows.contains("Bold and code"), "{rows}");
+        assert!(!rows.contains("**"));
+    }
 
     #[test]
     fn selected_text_joins_wrapped_rows() {

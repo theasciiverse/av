@@ -120,6 +120,8 @@ pub enum Modal {
     Downloads,
     Uninstall { id: String },
     Message(String),
+    /// a newer av: how to update it and what it brings
+    AvUpdate,
     /// after the intro, when the terminal is smaller than av is made for;
     /// drawn with the size as it is now, so it follows a resize
     Size,
@@ -228,6 +230,10 @@ pub struct App {
     cast_tx: Sender<CastMsg>,
     cast_rx: Receiver<CastMsg>,
     pub selection: Option<Selection>,
+    /// how far a tall note (help, welcome, a message) is scrolled
+    pub modal_scroll: u16,
+    /// the furthest it can scroll, as last drawn
+    pub modal_scroll_max: std::cell::Cell<u16>,
     /// the catalog's av when it is newer than this one
     pub av_newer: Option<catalog::AvRelease>,
     /// the title to start once its update is in ("Update first")
@@ -305,6 +311,8 @@ impl App {
             cast_tx,
             cast_rx,
             selection: None,
+            modal_scroll: 0,
+            modal_scroll_max: Default::default(),
             av_newer: None,
             play_after: None,
             page_view: None,
@@ -632,18 +640,15 @@ impl App {
 
     /// How to update av, and what the new one brings.
     pub fn av_update(&mut self) {
-        let Some(r) = &self.av_newer else { return };
-        let mut text = format!(
-            "av {}{} is out; you have {}.\n\nTo update, run this in a terminal:\n\n  {}",
-            r.version,
-            if r.date.is_empty() { String::new() } else { format!(" ({})", r.date) },
-            env!("CARGO_PKG_VERSION"),
-            crate::selfupdate::how()
-        );
-        if !r.notes.trim().is_empty() {
-            text += &format!("\n\nWhat's new:\n{}", r.notes.trim());
+        if self.av_newer.is_some() {
+            self.open(Modal::AvUpdate);
         }
-        self.modal = Some(Modal::Message(text));
+    }
+
+    /// Open a dialog at its top.
+    pub fn open(&mut self, m: Modal) {
+        self.modal_scroll = 0;
+        self.modal = Some(m);
     }
 
     fn support(&mut self) {
@@ -936,7 +941,7 @@ impl App {
                 };
             }
             KeyCode::F(5) => self.refresh(true),
-            KeyCode::F(1) => self.modal = Some(Modal::Help),
+            KeyCode::F(1) => self.open(Modal::Help),
             KeyCode::F(2) => self.open_downloads(),
             // "/ type to search": the slash starts a new search from any panel,
             // as in less and vim; no title name has one, so it is never typed
@@ -981,7 +986,7 @@ impl App {
             return;
         }
         if let Some(modal) = self.modal.take() {
-            let down = matches!(m.kind, MouseEventKind::Down(_));
+            let (down, m_kind) = (matches!(m.kind, MouseEventKind::Down(_)), m.kind);
             match (modal, hit) {
                 // a click on a choice dialog's button picks it
                 (Modal::Choice { options, .. }, Some(Hit::Choice(i))) if m.kind == MouseEventKind::Down(MouseButton::Left) => {
@@ -990,7 +995,15 @@ impl App {
                     }
                 }
                 // a click closes a note; other dialogs stay open
-                (Modal::Message(_) | Modal::Help | Modal::Welcome | Modal::Size, _) if down => {}
+                // the wheel scrolls a tall note
+                (m @ (Modal::Message(_) | Modal::Help | Modal::Welcome | Modal::AvUpdate), _)
+                    if matches!(m_kind, MouseEventKind::ScrollUp | MouseEventKind::ScrollDown) =>
+                {
+                    let step: i32 = if m_kind == MouseEventKind::ScrollUp { -3 } else { 3 };
+                    self.modal_scroll = (self.modal_scroll as i32 + step).clamp(0, self.modal_scroll_max.get() as i32) as u16;
+                    self.modal = Some(m);
+                }
+                (Modal::Message(_) | Modal::Help | Modal::Welcome | Modal::Size | Modal::AvUpdate, _) if down => {}
                 (modal, _) => self.modal = Some(modal),
             }
             return;
@@ -1020,7 +1033,7 @@ impl App {
                 self.focus = if self.focus == Focus::Show { Focus::List } else { Focus::Show };
             }
             (MouseEventKind::Down(MouseButton::Left), Some(Hit::Mine(m))) => self.only(m),
-            (MouseEventKind::Down(MouseButton::Left), Some(Hit::Help)) => self.modal = Some(Modal::Help),
+            (MouseEventKind::Down(MouseButton::Left), Some(Hit::Help)) => self.open(Modal::Help),
             (MouseEventKind::Down(MouseButton::Left), Some(Hit::Support)) => self.support(),
             (MouseEventKind::Down(MouseButton::Left), Some(Hit::AvUpdate)) => self.av_update(),
             (MouseEventKind::Down(MouseButton::Left), Some(Hit::Downloads)) => self.open_downloads(),
@@ -1061,8 +1074,9 @@ impl App {
     /// A screen cell as a cell of the page column, held inside the column.
     fn in_page(&self, pos: Position) -> Option<(u16, u16)> {
         let (r, top) = self.page_view?;
-        let x = pos.x.clamp(r.x, r.right().saturating_sub(1)) - r.x;
-        let y = pos.y.clamp(r.y, r.bottom().saturating_sub(1)) - r.y;
+        // max then min, not clamp: a column shrunk to nothing mid-drag must not panic
+        let x = pos.x.max(r.x).min(r.right().saturating_sub(1)).saturating_sub(r.x);
+        let y = pos.y.max(r.y).min(r.bottom().saturating_sub(1)).saturating_sub(r.y);
         Some((x, y + top))
     }
 
@@ -1295,8 +1309,24 @@ impl App {
                 _ => {}
             },
             // W in help opens the welcome screen again; any other key closes it
-            Modal::Help if matches!(k.code, KeyCode::Char('w' | 'W')) => self.modal = Some(Modal::Welcome),
-            Modal::Message(_) | Modal::Help | Modal::Welcome | Modal::Size => {}
+            Modal::Help if matches!(k.code, KeyCode::Char('w' | 'W')) => self.open(Modal::Welcome),
+            // a note taller than the screen scrolls; any other key closes it
+            m @ (Modal::Message(_) | Modal::Help | Modal::Welcome | Modal::AvUpdate)
+                if matches!(k.code, KeyCode::Up | KeyCode::Down | KeyCode::PageUp | KeyCode::PageDown | KeyCode::Home | KeyCode::End) =>
+            {
+                let max = self.modal_scroll_max.get();
+                self.modal_scroll = match k.code {
+                    KeyCode::Up => self.modal_scroll.saturating_sub(1),
+                    KeyCode::Down => self.modal_scroll + 1,
+                    KeyCode::PageUp => self.modal_scroll.saturating_sub(10),
+                    KeyCode::PageDown => self.modal_scroll + 10,
+                    KeyCode::Home => 0,
+                    _ => max,
+                }
+                .min(max);
+                self.modal = Some(m);
+            }
+            Modal::Message(_) | Modal::Help | Modal::Welcome | Modal::Size | Modal::AvUpdate => {}
             Modal::Downloads => self.downloads_key(k),
             Modal::Uninstall { id } => match k.code {
                 KeyCode::Left | KeyCode::Right | KeyCode::Up | KeyCode::Down => {

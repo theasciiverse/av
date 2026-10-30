@@ -30,10 +30,15 @@ use app::App;
 
 fn main() -> Result<()> {
     let paths = paths::Paths::new()?;
-    init_logging(&paths);
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    // Tab completion runs av on every Tab, and a shell's startup file on
+    // every new shell: those, help and the version stay out of the log
+    let quiet = args.first().is_some_and(|a| ["__complete", "completions", "help", "-h", "--help", "-V", "--version", "version"].contains(&a.as_str()));
+    if !quiet {
+        init_logging(&paths, args.is_empty());
+    }
     let url = catalog::url();
     log::info!("av {} starting, catalog {url}", env!("CARGO_PKG_VERSION"));
-    let args: Vec<String> = std::env::args().skip(1).collect();
     if !args.is_empty() {
         if let Err(e) = cli::run(paths, url, args) {
             eprintln!("av: {e:#}");
@@ -42,6 +47,11 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
+    // the first fc-list and ldconfig can take a moment; not on the UI thread
+    std::thread::spawn(|| {
+        glyphs::missing("braille");
+        libs::missing(&[]);
+    });
     let mut app = App::new(paths, url);
     let mut terminal = ratatui::init();
     let _ = execute!(std::io::stdout(), EnableMouseCapture);
@@ -54,13 +64,18 @@ fn main() -> Result<()> {
 /// Session logging per the Asciiverse convention, to av.log in the cache
 /// dir. Always on at info (actions, downloads, launches, failures), so a
 /// problem report can come with a log; RUST_LOG=av=debug adds every key and
-/// click. Past 1 MB at startup the log moves to av.log.1, one kept.
-fn init_logging(paths: &paths::Paths) {
-    let file = paths.cache.join("av.log");
-    if std::fs::metadata(&file).is_ok_and(|m| m.len() > LOG_MAX) {
-        let _ = std::fs::rename(&file, paths.cache.join("av.log.1"));
+/// click, and a RUST_LOG set for something else adds to av=info rather than
+/// replacing it. Past 1 MB the log moves to av.log.1, one kept; only the
+/// TUI does that, so a command run beside it never moves the log it writes.
+fn init_logging(paths: &paths::Paths, tui: bool) {
+    let file = paths.log();
+    if tui && std::fs::metadata(&file).is_ok_and(|m| m.len() > LOG_MAX) {
+        let _ = std::fs::rename(&file, file.with_extension("log.1"));
     }
-    let filter = std::env::var("RUST_LOG").unwrap_or_else(|_| "av=info".into());
+    let filter = match std::env::var("RUST_LOG") {
+        Ok(more) if !more.trim().is_empty() => format!("av=info,{more}"),
+        _ => "av=info".into(),
+    };
     if let Ok(f) = std::fs::OpenOptions::new().create(true).append(true).open(&file) {
         env_logger::Builder::new().parse_filters(&filter).target(env_logger::Target::Pipe(Box::new(f))).init();
     }
@@ -92,13 +107,17 @@ fn run(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> Result<()> {
             let _ = execute!(std::io::stdout(), DisableMouseCapture);
             ratatui::restore();
             launch(app, &t);
-            *terminal = ratatui::init();
-            let _ = execute!(std::io::stdout(), EnableMouseCapture);
-            terminal.clear()?;
+            // back the way ratatui::init came in, without another panic hook
+            ratatui::crossterm::terminal::enable_raw_mode()?;
+            let _ = execute!(std::io::stdout(), ratatui::crossterm::terminal::EnterAlternateScreen, EnableMouseCapture);
+            // a clean screen and a full redraw; resize, not clear, which asks the
+            // terminal where its cursor is and gives up on av if it doesn't say
+            let size = terminal.size()?;
+            terminal.resize(ratatui::layout::Rect::new(0, 0, size.width, size.height))?;
         }
         if last_snapshot.elapsed() > Duration::from_millis(500) {
             last_snapshot = std::time::Instant::now();
-            log::trace!(
+            log::debug!(
                 "snapshot show={:?} filter={:?} selected={} focus={:?} downloading={:?} queued={}",
                 app.show, app.filter, app.selected, app.focus, app.downloads.running().map(|d| &d.id), app.downloads.queued()
             );

@@ -95,8 +95,9 @@ them and keeps their saves and settings. Then `av` itself, the way it was
 installed:
 
 - **The .deb:** `sudo apt remove av`.
-- **For you only, with the install line:** run the install line again and
-  pick "remove the av in ~/.local/bin", or `rm ~/.local/bin/av`.
+- **For you only, with the install line:** `rm ~/.local/bin/av`. Where the
+  install line offers a package (Debian, Ubuntu), running it again also
+  offers "remove the av in ~/.local/bin".
 - **Windows:** delete `%LOCALAPPDATA%\Asciiverse\bin\av.exe`, and take
   that folder out of your user PATH ("Edit environment variables for your
   account").

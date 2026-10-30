@@ -31,8 +31,12 @@ pub struct Paths {
 /// the brand's spelling elsewhere.
 const NAME: &str = if cfg!(any(target_os = "macos", windows)) { "Asciiverse" } else { "asciiverse" };
 
-/// A path for display, with the home directory shortened to `~`.
+/// A path for display, with the home directory shortened to `~` on Linux
+/// and macOS; Windows has no `~`, so there it is shown in full.
 pub fn tilde(p: &std::path::Path) -> String {
+    if cfg!(windows) {
+        return p.display().to_string();
+    }
     match BaseDirs::new().and_then(|b| p.strip_prefix(b.home_dir()).ok().map(|r| r.to_path_buf())) {
         Some(rest) => format!("~/{}", rest.display()),
         None => p.display().to_string(),
@@ -56,6 +60,11 @@ impl Paths {
 
     pub fn title_dir(&self, kind: &str, id: &str) -> PathBuf {
         self.install.join(format!("{kind}s")).join(id)
+    }
+
+    /// av's own log, which a problem report should come with.
+    pub fn log(&self) -> PathBuf {
+        self.cache.join("av.log")
     }
 
     /// Where a title is installed: under the kind it was installed as, which
