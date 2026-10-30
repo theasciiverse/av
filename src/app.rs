@@ -365,10 +365,11 @@ impl App {
                 if let Some(r) = &self.av_newer {
                     log::info!("av {} is out", r.version);
                 }
-                let mut titles: Vec<Title> = l.catalog.titles.into_values().collect();
-                // grouped by kind (catalog::kind_rank), alphabetical within each
-                let rank = catalog::kind_rank;
-                titles.sort_by(|a, b| (rank(&a.kind), a.title.to_lowercase()).cmp(&(rank(&b.kind), b.title.to_lowercase())));
+                // grouped by kind (catalog::rank), alphabetical within each, and
+                // last what is installed but no longer in the catalog
+                let gone = catalog::gone(&l.catalog.titles, &self.state.installed);
+                let mut titles: Vec<Title> = l.catalog.titles.into_values().chain(gone).collect();
+                catalog::sort(&mut titles);
                 self.titles = titles;
                 self.collections = l.catalog.collections;
                 self.offline = l.offline;
@@ -410,8 +411,7 @@ impl App {
         if !f.is_empty() {
             // within each kind's group, titles whose name matches come first;
             // sort_by_key is stable, so the alphabetical order is kept inside
-            let rank = catalog::kind_rank;
-            v.sort_by_key(|t| (rank(&t.kind), !t.title.to_lowercase().contains(&f)));
+            v.sort_by_key(|t| (catalog::rank(t), !t.title.to_lowercase().contains(&f)));
         }
         v
     }
@@ -866,7 +866,9 @@ impl App {
 
     /// None when there is nothing to show, else a placeholder message.
     pub fn cast_note(&self, t: &Title) -> Option<String> {
-        if t.cast_url.is_none() {
+        if t.gone {
+            Some("no longer in the catalog, so no preview".into())
+        } else if t.cast_url.is_none() {
             Some("no preview recorded yet".into())
         } else if let Some(e) = self.cast_failed.get(&t.id) {
             Some(format!("preview unavailable: {e}"))
@@ -1372,7 +1374,7 @@ mod tests {
         let title = |id: &str, kind: &str, version: &str| Title { id: id.into(), kind: kind.into(), version: version.into(), ..Default::default() };
         let (old, cur, mud, wish) = (title("old", "game", "2"), title("cur", "game", "1"), title("mud", "mud", ""), title("wish", "game", "1"));
         for (id, v) in [("old", "1"), ("cur", "1")] {
-            let i = Installed { id: id.into(), version: v.into(), sha256: String::new(), installed_at: String::new(), kind: "game".into(), target: String::new() };
+            let i = Installed { id: id.into(), version: v.into(), sha256: String::new(), installed_at: String::new(), kind: "game".into(), target: String::new(), exec: String::new(), args: Vec::new() };
             state.installed.insert(id.into(), i);
         }
         state.wishlist.insert("wish".into());

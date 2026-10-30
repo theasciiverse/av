@@ -342,6 +342,7 @@ fn short_name(kind: &str) -> &'static str {
 
 fn section_name(kind: &str) -> &'static str {
     match kind {
+        "gone" => "No longer in the catalog",
         "game" => "Games",
         "adventure" => "Text adventures",
         "program" => "Programs",
@@ -362,14 +363,16 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
     let mut row_title: Vec<Option<usize>> = Vec::new(); // list row to title index, None for headers
     let mut last_kind: Option<String> = None;
     for (i, t) in app.visible().iter().enumerate() {
-        if last_kind.as_deref() != Some(t.kind.as_str()) {
-            let label = format!("── {} ", section_name(&t.kind));
+        // titles no longer in the catalog make a group of their own, last
+        let group = if t.gone { "gone" } else { t.kind.as_str() };
+        if last_kind.as_deref() != Some(group) {
+            let label = format!("── {} ", section_name(group));
             let fill = inner_w.saturating_sub(label.chars().count());
             items.push(ListItem::new(Line::from(vec![
                 Span::styled(label, Style::default().fg(theme::AMBER_SOFT).add_modifier(Modifier::BOLD)),
                 Span::styled("─".repeat(fill), Style::default().fg(theme::LINE)),
             ])));
-            last_kind = Some(t.kind.clone());
+            last_kind = Some(group.to_string());
             row_title.push(None);
         }
         row_title.push(Some(i));

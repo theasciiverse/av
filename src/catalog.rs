@@ -62,6 +62,43 @@ pub struct Collection {
 
 pub type Collections = BTreeMap<String, Collection>;
 
+/// Where a title's group sits in the list: its kind's place, and titles no
+/// longer in the catalog after all of them.
+pub fn rank(t: &Title) -> u8 {
+    if t.gone { u8::MAX } else { kind_rank(&t.kind) }
+}
+
+/// The list's order: by group, alphabetical within each.
+pub fn sort(titles: &mut [Title]) {
+    titles.sort_by(|a, b| (rank(a), a.title.to_lowercase()).cmp(&(rank(b), b.title.to_lowercase())));
+}
+
+/// Installed titles the catalog no longer lists, as titles of their own, so
+/// they can still be played and uninstalled: what installed.json knows of
+/// them, started as they were installed.
+pub fn gone(titles: &BTreeMap<String, Title>, installed: &BTreeMap<String, crate::state::Installed>) -> Vec<Title> {
+    installed
+        .values()
+        .filter(|i| !titles.contains_key(&i.id) && !titles.values().any(|t| t.id == i.id))
+        .map(|i| {
+            let mut t = Title {
+                id: i.id.clone(),
+                kind: if i.kind.is_empty() { "game".into() } else { i.kind.clone() },
+                title: i.id.clone(),
+                description: "No longer in the catalog. It stays playable here until you uninstall it.".into(),
+                version: i.version.clone(),
+                gone: true,
+                ..Default::default()
+            };
+            t.exec.args = i.args.clone();
+            if !i.exec.is_empty() {
+                t.exec.names.insert(t.kind.clone(), serde_json::Value::String(i.exec.clone()));
+            }
+            t
+        })
+        .collect()
+}
+
 /// Where a kind's group sits in the list: games first, then text adventures,
 /// programs, art and demos, movies, MUDs last
 pub fn kind_rank(kind: &str) -> u8 {
@@ -114,6 +151,9 @@ pub struct Title {
     // storefront curation (the OLD! and NEW! banners); no field in SCHEMA.md yet
     pub old: bool,
     pub new: bool,
+    /// installed, but no longer in the catalog (see `gone`); not a catalog field
+    #[serde(skip)]
+    pub gone: bool,
 }
 
 /// `[exec]`: the binary to run, named by kind (`game = "greed"`), and the
@@ -470,6 +510,34 @@ mod tests {
             }}"#,
         );
         assert_eq!(c.titles.keys().collect::<Vec<_>>(), ["good"]);
+    }
+
+    #[test]
+    fn installed_titles_the_catalog_dropped_stay_listed() {
+        use crate::state::Installed;
+        let titles = catalog(r#"{"schema_version": 1, "titles": {"kept": {"id": "kept", "kind": "game"}}}"#).titles;
+        let inst = |id: &str, exec: &str| Installed {
+            id: id.into(),
+            version: "1.0".into(),
+            sha256: String::new(),
+            installed_at: String::new(),
+            kind: "program".into(),
+            target: String::new(),
+            exec: exec.into(),
+            args: vec!["-f".into()],
+        };
+        let installed = BTreeMap::from([("kept".to_string(), inst("kept", "")), ("old".to_string(), inst("old", "oldbin"))]);
+        let gone = gone(&titles, &installed);
+        assert_eq!(gone.len(), 1);
+        let t = &gone[0];
+        assert!(t.gone && t.id == "old" && t.kind == "program" && t.version == "1.0");
+        assert!(t.exec_name().starts_with("oldbin"), "started as it was installed");
+        assert_eq!(t.exec.args, ["-f"]);
+        // and they sort after every kind
+        let mut all: Vec<Title> = titles.into_values().chain(gone).collect();
+        all.reverse();
+        sort(&mut all);
+        assert_eq!(all.last().unwrap().id, "old");
     }
 
     #[test]

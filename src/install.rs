@@ -159,6 +159,8 @@ fn run(job: &Job, tx: &Sender<Progress>) -> Result<Installed> {
         installed_at: crate::state::now_rfc3339(),
         kind: t.kind.clone(),
         target: target.into(),
+        exec: t.exec.names.values().find_map(|v| v.as_str().map(String::from)).unwrap_or_default(),
+        args: t.exec.args.clone(),
     })
 }
 

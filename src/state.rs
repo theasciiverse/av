@@ -16,6 +16,11 @@ pub struct Installed {
     pub kind: String,
     #[serde(default)]
     pub target: String,
+    /// how to start it, kept so it still starts after the catalog drops it
+    #[serde(default)]
+    pub exec: String,
+    #[serde(default)]
+    pub args: Vec<String>,
 }
 
 /// Local play history per title, Steam-style; never leaves the machine.
@@ -217,7 +222,7 @@ mod tests {
     use super::*;
 
     fn installed(id: &str, version: &str) -> Installed {
-        Installed { id: id.into(), version: version.into(), sha256: String::new(), installed_at: now_rfc3339(), kind: "game".into(), target: String::new() }
+        Installed { id: id.into(), version: version.into(), sha256: String::new(), installed_at: now_rfc3339(), kind: "game".into(), target: String::new(), exec: String::new(), args: Vec::new() }
     }
 
     fn dir(name: &str) -> PathBuf {

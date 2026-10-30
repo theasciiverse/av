@@ -174,9 +174,9 @@ impl Ctx {
             // that says how to update already
             self.av_newer = None;
         }
-        let mut titles: Vec<Title> = l.catalog.titles.into_values().collect();
-        let rank = catalog::kind_rank;
-        titles.sort_by(|a, b| (rank(&a.kind), a.title.to_lowercase()).cmp(&(rank(&b.kind), b.title.to_lowercase())));
+        let gone = catalog::gone(&l.catalog.titles, &self.state.installed);
+        let mut titles: Vec<Title> = l.catalog.titles.into_values().chain(gone).collect();
+        catalog::sort(&mut titles);
         self.titles = titles;
         self.collections = l.catalog.collections;
         self.offline = l.offline;
