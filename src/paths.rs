@@ -58,6 +58,13 @@ impl Paths {
         self.install.join(format!("{kind}s")).join(id)
     }
 
+    /// Where a title is installed: under the kind it was installed as, which
+    /// the catalog may have changed since, else the catalog's kind.
+    pub fn installed_dir(&self, t: &crate::catalog::Title, installed: Option<&crate::state::Installed>) -> PathBuf {
+        let kind = installed.map(|i| i.kind.as_str()).filter(|k| !k.is_empty()).unwrap_or(&t.kind);
+        self.title_dir(kind, &t.id)
+    }
+
     /// Where an uninstalled title's own files (saves, scores, settings it
     /// wrote next to itself) wait for a reinstall.
     pub fn saves(&self, id: &str) -> PathBuf {

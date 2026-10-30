@@ -269,6 +269,7 @@ impl Ctx {
                 dest: dest.clone(),
                 saves: self.paths.saves(&t.id),
                 bin: self.paths.bin.clone(),
+                previous: Some(self.paths.installed_dir(&t, self.state.installed.get(&t.id))),
                 cancel: None,
                 job: 0,
             },
@@ -365,7 +366,7 @@ impl Ctx {
                 self.paint(format!("{} {} is out; you have {have}. Update with `av update {}`", t.title, t.version, t.id), theme::AMBER)
             );
         }
-        let (mut cmd, log) = crate::launch::command(&self.paths, &t).map_err(anyhow::Error::msg)?;
+        let (mut cmd, log) = crate::launch::command(&self.paths, &t, self.state.installed.get(&t.id)).map_err(anyhow::Error::msg)?;
         cmd.args(extra);
         let o = crate::launch::run(cmd, Some(log));
         self.state.record_play(&t.id, o.seconds);

@@ -122,9 +122,10 @@ Where things go:
 | titles | `~/.local/share/asciiverse/` | `~/Library/Application Support/Asciiverse/` | `%LOCALAPPDATA%\Asciiverse\` |
 | cache, log | `~/.cache/asciiverse/` | `~/Library/Caches/Asciiverse/` | `%LOCALAPPDATA%\Asciiverse\cache\` |
 
-On Linux and macOS each installed title is also linked into `~/.local/bin`,
-so it can be started from the shell by its id. The cache is always safe to
-delete.
+On Linux and macOS each installed title also gets a small script in
+`~/.local/bin`, so it starts from the shell by its id just as it does from
+`av`. A file of that name that isn't `av`'s is left alone. The cache is
+always safe to delete.
 
 `av` keeps a log, `av.log` in the cache folder (moved to `av.log.1` once it
 passes 1 MB). `RUST_LOG=av=debug` makes it record every key and click too,

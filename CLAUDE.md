@@ -217,8 +217,12 @@ platform's cache folder, so deleting it is always safe.
   not sync through a roaming profile.
 - Append `.exe` when resolving `exec` on Windows. Keep ids strictly
   lowercase and install paths shallow (legacy Windows `MAX_PATH`).
-- **PATH:** on Linux/macOS, installing symlinks the binary to
-  `~/.local/bin/<id>` (the `pipx` convention). On first run `av` checks
+- **PATH:** on Linux/macOS, installing writes `~/.local/bin/<id>` (the
+  `pipx` folder): a small script that starts the title as `av` does, from
+  its install folder with the catalog's `args`, then what was typed (a
+  bare symlink missed both; changed 2026-10-30). `av` replaces or removes
+  only its own scripts, and its older symlinks; anything else of that name
+  is left alone and the install says so. On first run `av` checks
   whether `~/.local/bin` is on `$PATH` and, if not, prints the exact line to
   add. It never edits shell rc files itself.
 - Known gap, separate follow-up: `rusty-pinball` (`src/persist.rs`) and

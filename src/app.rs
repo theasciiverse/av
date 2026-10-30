@@ -542,6 +542,7 @@ impl App {
                 dest: self.paths.title_dir(&t.kind, &t.id),
                 saves: self.paths.saves(&t.id),
                 bin: self.paths.bin.clone(),
+                previous: Some(self.paths.installed_dir(&t, self.state.installed.get(&t.id))),
                 cancel: Some(cancel),
                 job,
             },
@@ -1304,7 +1305,7 @@ impl App {
                 }
                 KeyCode::Enter => {
                     let Some(t) = self.titles.iter().find(|t| t.id == id).cloned() else { return };
-                    let dest = self.paths.title_dir(&t.kind, &t.id);
+                    let dest = self.paths.installed_dir(&t, self.state.installed.get(&t.id));
                     let keep = self.uninstall_keep_data;
                     match install::uninstall(&dest, self.paths.bin.as_deref(), &t.id, &self.paths.saves(&t.id), keep) {
                         Ok(()) => {

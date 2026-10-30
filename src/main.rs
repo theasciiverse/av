@@ -109,7 +109,7 @@ fn run(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> Result<()> {
 
 /// Run a title as a separate process in the same terminal; av never links it.
 fn launch(app: &mut App, t: &catalog::Title) {
-    match launch::command(&app.paths, t) {
+    match launch::command(&app.paths, t, app.state.installed.get(&t.id)) {
         Ok((cmd, log)) => {
             let outcome = launch::run(cmd, Some(log));
             app.finished(t, outcome);

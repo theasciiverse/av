@@ -22,9 +22,9 @@ pub struct Outcome {
 /// silent, so nothing it prints lands on av's screen.
 pub fn open_url(url: &str) -> std::io::Result<()> {
     let mut cmd = if cfg!(windows) {
-        // start's first quoted argument is the window title
-        let mut c = Command::new("cmd");
-        c.args(["/C", "start", "", url]);
+        // not through cmd, which would read & | ^ % in the URL as its own
+        let mut c = Command::new("rundll32");
+        c.args(["url.dll,FileProtocolHandler", url]);
         c
     } else if cfg!(target_os = "macos") {
         let mut c = Command::new("open");
@@ -129,7 +129,16 @@ impl Guard {
             }
             Guard { termios, old_int, old_quit }
         }
-        #[cfg(not(unix))]
+        #[cfg(windows)]
+        {
+            // Ctrl+C reaches every process on the console: av ignores it
+            // while the title runs, and the title keeps its own handling
+            // SAFETY: registering a handler function that only returns TRUE
+            unsafe { SetConsoleCtrlHandler(Some(ignore_ctrl), 1) };
+            let _ = cmd;
+            Guard {}
+        }
+        #[cfg(not(any(unix, windows)))]
         {
             let _ = cmd;
             Guard {}
@@ -156,7 +165,23 @@ impl Drop for Guard {
             libc::signal(libc::SIGINT, self.old_int);
             libc::signal(libc::SIGQUIT, self.old_quit);
         }
+        #[cfg(windows)]
+        // SAFETY: removing the handler added in Guard::new
+        unsafe {
+            SetConsoleCtrlHandler(Some(ignore_ctrl), 0);
+        }
     }
+}
+
+#[cfg(windows)]
+unsafe extern "system" {
+    fn SetConsoleCtrlHandler(handler: Option<unsafe extern "system" fn(u32) -> i32>, add: i32) -> i32;
+}
+
+/// Handles Ctrl+C and Ctrl+Break by doing nothing, so av lives on.
+#[cfg(windows)]
+unsafe extern "system" fn ignore_ctrl(_event: u32) -> i32 {
+    1
 }
 
 /// Lera, the Asciiverse MUD client: installed through av as a program,
@@ -172,7 +197,7 @@ pub fn lera(paths: &crate::paths::Paths) -> Option<PathBuf> {
 /// The command that starts a title: its binary with the catalog's arguments,
 /// run from its install folder, or for a MUD, Lera (telnet as the fallback).
 /// The log is where the title's stderr goes.
-pub fn command(paths: &crate::paths::Paths, t: &crate::catalog::Title) -> Result<(Command, PathBuf), String> {
+pub fn command(paths: &crate::paths::Paths, t: &crate::catalog::Title, installed: Option<&crate::state::Installed>) -> Result<(Command, PathBuf), String> {
     let cmd = if let Some(c) = &t.connect {
         // Lera finds the world by id in the same cached catalog; telnet is the fallback
         if let Some(lera) = lera(paths) {
@@ -187,7 +212,7 @@ pub fn command(paths: &crate::paths::Paths, t: &crate::catalog::Title) -> Result
             cmd
         }
     } else {
-        let dir = paths.title_dir(&t.kind, &t.id);
+        let dir = paths.installed_dir(t, installed);
         let Some(exe) = crate::install::find_exec(&dir, &t.exec_name()) else {
             return Err(format!("{} is not installed correctly; reinstall it", t.title));
         };

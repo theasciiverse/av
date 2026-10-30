@@ -32,6 +32,9 @@ pub struct Job {
     /// the title's own files kept from an uninstall, put back by this install
     pub saves: PathBuf,
     pub bin: Option<PathBuf>,
+    /// the install folder under the kind it was installed as, when the
+    /// catalog has moved the title to another kind since: moved to `dest`
+    pub previous: Option<PathBuf>,
     /// set from outside to stop the download; checked per chunk, and once
     /// more before the new install replaces the old
     pub cancel: Option<Arc<AtomicBool>>,
@@ -114,6 +117,15 @@ fn run(job: &Job, tx: &Sender<Progress>) -> Result<Installed> {
     // never leaves a half-written install
     let parent = job.dest.parent().context("bad install path")?;
     std::fs::create_dir_all(parent)?;
+    // a title the catalog moved to another kind: its install, saves and
+    // all, moves along before the update
+    if let Some(prev) = job.previous.as_ref().filter(|p| *p != &job.dest) {
+        recover(prev)?;
+        if prev.exists() && !job.dest.exists() {
+            log::info!("{} moves from {} to {}", t.id, prev.display(), job.dest.display());
+            std::fs::rename(prev, &job.dest)?;
+        }
+    }
     recover(&job.dest)?;
     let staging = sibling(&job.dest, "new");
     // only ever the archive's files: the title's own are never moved here
@@ -135,8 +147,10 @@ fn run(job: &Job, tx: &Sender<Progress>) -> Result<Installed> {
     }
     let exe = job.dest.join(exe.strip_prefix(&staging)?);
 
-    if let Some(bin) = &job.bin {
-        link(bin, &t.id, &exe)?;
+    if let Some(bin) = &job.bin
+        && let Some(note) = link(bin, t, &exe, &job.dest)?
+    {
+        status(&note);
     }
     Ok(Installed {
         id: t.id.clone(),
@@ -347,23 +361,64 @@ fn set_executable(path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn link(bin: &Path, id: &str, exe: &Path) -> Result<()> {
+/// The first lines of the scripts av writes into ~/.local/bin, by which it
+/// knows them as its own.
+const SCRIPT_MARK: &str = "#!/bin/sh\n# av: ";
+
+/// Whether av may replace `l` in ~/.local/bin: a script of av's, or a
+/// symlink into av's install folders (how av linked titles before).
+fn replaceable(l: &Path, dest: &Path) -> bool {
+    let root = dest.parent().and_then(Path::parent).unwrap_or(dest);
+    match std::fs::read_link(l) {
+        Ok(target) => target.starts_with(root),
+        Err(_) => std::fs::read_to_string(l).is_ok_and(|s| s.starts_with(SCRIPT_MARK)),
+    }
+}
+
+/// Whether `l` starts the install under `dest`, so uninstalling it goes too.
+fn starts(l: &Path, dest: &Path) -> bool {
+    match std::fs::read_link(l) {
+        Ok(target) => target.starts_with(dest),
+        Err(_) => std::fs::read_to_string(l).is_ok_and(|s| s.starts_with(SCRIPT_MARK) && s.contains(&sh_quote(&dest.to_string_lossy()))),
+    }
+}
+
+/// A word for sh, single-quoted.
+fn sh_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
+/// On Linux and macOS, `~/.local/bin/<id>` starts the title the way av
+/// does: from its install folder, with the catalog's arguments, then
+/// whatever was typed after the name. A file of the same name that isn't
+/// av's (a pipx link, the player's own) is left alone, and the note says so.
+fn link(bin: &Path, t: &Title, exe: &Path, dest: &Path) -> Result<Option<String>> {
     #[cfg(unix)]
     {
+        use std::os::unix::fs::PermissionsExt;
         std::fs::create_dir_all(bin)?;
-        let l = bin.join(id);
-        if l.symlink_metadata().is_ok() {
-            // only replace links av made; never clobber a user's own file
-            if std::fs::read_link(&l).is_err() {
-                log::warn!("{} exists and is not a symlink; leaving it", l.display());
-                return Ok(());
-            }
-            std::fs::remove_file(&l)?;
+        let l = bin.join(&t.id);
+        if l.symlink_metadata().is_ok() && !replaceable(&l, dest) {
+            log::warn!("{} is not av's; leaving it", l.display());
+            return Ok(Some(format!("{} is someone else's, so start {} from av", crate::paths::tilde(&l), t.id)));
         }
-        std::os::unix::fs::symlink(exe, &l)?;
+        let args: Vec<String> = t.exec.args.iter().map(|a| sh_quote(a)).collect();
+        let script = format!(
+            "{SCRIPT_MARK}starts {} as av does; av rewrites or removes this file\ncd {} || exit 1\nexec {}{}{} \"$@\"\n",
+            t.id,
+            sh_quote(&dest.to_string_lossy()),
+            sh_quote(&exe.to_string_lossy()),
+            if args.is_empty() { "" } else { " " },
+            args.join(" ")
+        );
+        let tmp = bin.join(format!(".{}.av-tmp", t.id));
+        std::fs::write(&tmp, script)?;
+        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755))?;
+        // a rename replaces an old link of av's in one step
+        std::fs::rename(&tmp, &l)?;
     }
-    let _ = (bin, id, exe);
-    Ok(())
+    let _ = (bin, t, exe, dest);
+    Ok(None)
 }
 
 /// Remove a title. With `keep`, the files it wrote itself in its install
@@ -372,7 +427,7 @@ fn link(bin: &Path, id: &str, exe: &Path) -> Result<()> {
 pub fn uninstall(dest: &Path, bin: Option<&Path>, id: &str, saves: &Path, keep: bool) -> Result<()> {
     if let Some(bin) = bin {
         let l = bin.join(id);
-        if std::fs::read_link(&l).map(|t| t.starts_with(dest)).unwrap_or(false) {
+        if l.symlink_metadata().is_ok() && starts(&l, dest) {
             std::fs::remove_file(&l)?;
         }
     }
@@ -435,9 +490,14 @@ mod tests {
 
     /// A catalog title for this machine, served from `url`, with `sha256`.
     fn title(version: &str, url: &str, sha256: &str) -> Title {
+        title_with(version, url, sha256, r#""kind": "game""#)
+    }
+
+    /// The same with other fields, e.g. `"kind": "art"` or an `exec`.
+    fn title_with(version: &str, url: &str, sha256: &str, fields: &str) -> Title {
         let target = catalog::host_targets()[0];
         let platform = format!(r#"{{"url": "{url}", "sha256": "{sha256}", "size": 0}}"#);
-        let json = format!(r#"{{"id": "game", "kind": "game", "version": "{version}", "platforms": {{"{target}": {platform}}}}}"#);
+        let json = format!(r#"{{"id": "game", {fields}, "version": "{version}", "platforms": {{"{target}": {platform}}}}}"#);
         serde_json::from_str(&json).unwrap()
     }
 
@@ -472,6 +532,7 @@ mod tests {
                 dest: self.dest(),
                 saves: self.saves(),
                 bin: Some(self.bin()),
+                previous: None,
                 cancel: None,
                 job: 0,
             }
@@ -506,7 +567,7 @@ mod tests {
         {
             use std::os::unix::fs::PermissionsExt;
             assert_ne!(fs::metadata(&exe).unwrap().permissions().mode() & 0o111, 0, "the binary is executable");
-            assert_eq!(fs::read_link(home.bin().join("game")).unwrap(), exe);
+            assert!(read(&home.bin().join("game")).contains(&*exe.to_string_lossy()), "~/.local/bin/game starts it");
         }
         assert!(rx.try_iter().any(|p| matches!(p, super::Progress::Status { msg, .. } if msg.starts_with("checksum ok"))));
         assert_eq!(fs::read_dir(home.root.join("cache/downloads")).unwrap().count(), 0, "the archive is removed after installing");
@@ -550,6 +611,79 @@ mod tests {
         assert!(run(&home.job(title("1.0", "/r/1.tar.gz", &sha1), &format!("{base}/catalog.json")), &tx).is_err());
         assert_eq!(fs::read_dir(home.root.join("cache/downloads")).unwrap().count(), 0);
         assert!(!sibling(&home.dest(), "new").exists());
+    }
+
+    /// From the shell, a title starts as it does from av: in its install
+    /// folder, with the catalog's arguments, then what was typed.
+    #[cfg(unix)]
+    #[test]
+    fn the_shell_starts_a_title_the_way_av_does() {
+        let v1 = tar_gz_with(&[("game/game", "#!/bin/sh\necho \"$(pwd)|$*\"\n")]);
+        let sha1 = sha(&v1);
+        let base = serve(BTreeMap::from([("/r/1.tar.gz".to_string(), v1)]));
+        let home = Home::new("script");
+        let (tx, _rx) = channel();
+        let t = title_with("1.0", "/r/1.tar.gz", &sha1, r#""kind": "game", "exec": {"game": "game", "args": ["-d", "it's here"]}"#);
+        run(&home.job(t, &format!("{base}/catalog.json")), &tx).unwrap();
+        let out = std::process::Command::new(home.bin().join("game")).arg("more").output().unwrap();
+        let dest = fs::canonicalize(home.dest()).unwrap();
+        assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), format!("{}|-d it's here more", dest.display()));
+        uninstall(&home.dest(), Some(&home.bin()), "game", &home.saves(), true).unwrap();
+        assert!(home.bin().join("game").symlink_metadata().is_err(), "uninstall takes the script away");
+    }
+
+    /// Only what av made in ~/.local/bin is replaced or removed.
+    #[cfg(unix)]
+    #[test]
+    fn someone_elses_file_in_local_bin_is_left_alone() {
+        let v1 = tar_gz("binary 1", "data 1");
+        let sha1 = sha(&v1);
+        let base = serve(BTreeMap::from([("/r/1.tar.gz".to_string(), v1)]));
+        let catalog_url = format!("{base}/catalog.json");
+        let (tx, rx) = channel();
+        let other = std::env::temp_dir().join(format!("av-pipx-tool-{}", std::process::id()));
+        fs::write(&other, "pipx's").unwrap();
+        for theirs in ["link", "file"] {
+            let home = Home::new(&format!("theirs-{theirs}"));
+            fs::create_dir_all(home.bin()).unwrap();
+            let l = home.bin().join("game");
+            if theirs == "link" { std::os::unix::fs::symlink(&other, &l).unwrap() } else { fs::write(&l, "my own script").unwrap() }
+            run(&home.job(title("1.0", "/r/1.tar.gz", &sha1), &catalog_url), &tx).unwrap();
+            assert!(rx.try_iter().any(|p| matches!(p, super::Progress::Status { msg, .. } if msg.contains("someone else's"))), "{theirs}: says so");
+            uninstall(&home.dest(), Some(&home.bin()), "game", &home.saves(), true).unwrap();
+            match theirs {
+                "link" => assert_eq!(fs::read_link(&l).unwrap(), other),
+                _ => assert_eq!(read(&l), "my own script"),
+            }
+        }
+        // a symlink av made before it wrote scripts is av's to replace
+        let home = Home::new("old-link");
+        run(&home.job(title("1.0", "/r/1.tar.gz", &sha1), &catalog_url), &tx).unwrap();
+        let l = home.bin().join("game");
+        fs::remove_file(&l).unwrap();
+        std::os::unix::fs::symlink(home.exe(), &l).unwrap();
+        run(&home.job(title("1.0", "/r/1.tar.gz", &sha1), &catalog_url), &tx).unwrap();
+        assert!(fs::read_link(&l).is_err() && read(&l).starts_with(super::SCRIPT_MARK));
+        let _ = fs::remove_file(&other);
+    }
+
+    #[test]
+    fn a_title_moved_to_another_kind_takes_its_install_along() {
+        let v1 = tar_gz("binary 1", "data 1");
+        let sha1 = sha(&v1);
+        let base = serve(BTreeMap::from([("/r/1.tar.gz".to_string(), v1)]));
+        let catalog_url = format!("{base}/catalog.json");
+        let home = Home::new("kind");
+        let (tx, _rx) = channel();
+        run(&home.job(title("1.0", "/r/1.tar.gz", &sha1), &catalog_url), &tx).unwrap();
+        fs::write(home.dest().join("game/save.dat"), "my save").unwrap();
+        // the catalog now calls it art: the update goes to arts/, from games/
+        let mut job = home.job(title_with("1.0", "/r/1.tar.gz", &sha1, r#""kind": "art""#), &catalog_url);
+        job.previous = Some(home.dest());
+        job.dest = home.root.join("arts/game");
+        run(&job, &tx).unwrap();
+        assert_eq!(read(&home.root.join("arts/game/game/save.dat")), "my save");
+        assert!(!home.dest().exists());
     }
 
     #[test]
