@@ -412,7 +412,8 @@ impl App {
         if !f.is_empty() {
             // within each kind's group, titles whose name matches come first;
             // sort_by_key is stable, so the alphabetical order is kept inside
-            v.sort_by_key(|t| (catalog::rank(t), !t.title.to_lowercase().contains(&f)));
+            // the lowercased name is the search text's first line (catalog::index)
+            v.sort_by_cached_key(|t| (catalog::rank(t), !t.haystack.lines().next().unwrap_or("").contains(&f)));
         }
         v
     }
