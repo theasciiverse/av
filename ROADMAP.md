@@ -1,6 +1,6 @@
 # Roadmap
 
-av is at 0.9.0 (2026-10-28): everything planned works on Linux, from the
+av is at 0.9.1 (2026-10-30): everything planned works on Linux, from the
 intro and the welcome screen to playing a title and reading its news. It
 has never run on macOS or Windows. 1.0.0 is when everything below is in
 and av has had its first public release.
@@ -34,12 +34,20 @@ and av has had its first public release.
 - [x] Tests for install, update and uninstall against a local catalog,
   including a download whose checksum doesn't match
 
+## 0.9.1: built
+
+- [x] A `.deb` for amd64 and arm64 in every release: the Asciiverse desktop
+  entry and icon, tab completion for bash, zsh and fish
+- [x] The catalog loads in the background while the intro plays, and every
+  request gives up on a dead network instead of hanging
+
 ## 1.0.0
 
 - [ ] Run and checked on macOS and Windows, and CI passing on all three
 - [ ] The installers' address, `asciiverse.sh/releases/av/latest`, sent on
   to GitHub Releases (a `_redirects` line in `hub`)
 - [ ] The first public release, against the real catalog at asciiverse.sh
+- [ ] AppImage, then snap and Flatpak
 
 ## After 1.0
 
