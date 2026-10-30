@@ -1,7 +1,7 @@
 # Push a tag like v0.1.0 to build every target and open a draft GitHub
 # Release holding the archives the website's install.sh and install.ps1
 # fetch: av-<target>.tar.gz (av at the top), av-<target>.zip (av.exe at the
-# top), av_<version>-1_<arch>.deb and SHA256SUMS. Publishing the draft is
+# top), av_amd64.deb, av_arm64.deb and SHA256SUMS. Publishing the draft is
 # done by hand.
 name: Release
 
@@ -79,7 +79,7 @@ jobs:
           name: av-${{ matrix.target }}
           path: av-${{ matrix.target }}.*
 
-  # av_<version>-1_{amd64,arm64}.deb from the musl builds above, with the
+  # av_amd64.deb and av_arm64.deb from the musl builds above, with the
   # desktop entry, icon and shell completions (config in Cargo.toml)
   deb:
     needs: build
@@ -105,9 +105,9 @@ jobs:
             tar -xzf av-$t.tar.gz -C target/$t/release ./av
           done
           dist/deb-assets.sh target/x86_64-unknown-linux-musl/release/av THIRD-PARTY-LICENSES.txt
-          for t in x86_64-unknown-linux-musl aarch64-unknown-linux-musl; do
-            cargo deb --no-build --target $t --output .
-          done
+          # fixed names, so the website and install.sh can link the latest
+          cargo deb --no-build --target x86_64-unknown-linux-musl --output av_amd64.deb
+          cargo deb --no-build --target aarch64-unknown-linux-musl --output av_arm64.deb
           dpkg-deb --info av_*_amd64.deb
       - uses: actions/upload-artifact@v4
         with:
