@@ -15,6 +15,8 @@ mod md;
 mod paths;
 mod selfupdate;
 mod state;
+#[cfg(test)]
+mod testutil;
 mod theme;
 mod ui;
 
@@ -29,7 +31,7 @@ use app::App;
 fn main() -> Result<()> {
     let paths = paths::Paths::new()?;
     init_logging(&paths);
-    let url = std::env::var("AV_CATALOG_URL").unwrap_or_else(|_| catalog::DEFAULT_CATALOG_URL.into());
+    let url = catalog::url();
     log::info!("av {} starting, catalog {url}", env!("CARGO_PKG_VERSION"));
     let args: Vec<String> = std::env::args().skip(1).collect();
     if !args.is_empty() {

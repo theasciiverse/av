@@ -97,7 +97,11 @@ pub fn run(paths: Paths, url: String, args: Vec<String>) -> Result<()> {
         }
         _ => {}
     }
-    let mut cx = Ctx { state: State::load(&paths.state), paths, titles: Vec::new(), collections: Default::default(), offline: false, url, color, tty, av_newer: None };
+    let state = State::load(&paths.state);
+    for f in &state.set_aside {
+        eprintln!("av: could not read it, so set it aside: {f}");
+    }
+    let mut cx = Ctx { state, paths, titles: Vec::new(), collections: Default::default(), offline: false, url, color, tty, av_newer: None };
     let known = ["install", "update", "upgrade", "uninstall", "remove", "play", "run", "list", "ls", "search", "info", "show"];
     if !known.contains(&cmd) {
         bail!("unknown command {cmd:?}\n\n{USAGE}");
@@ -152,6 +156,11 @@ impl Ctx {
     fn load(&mut self) -> Result<()> {
         let l = catalog::load(&self.url, &self.paths.cache, false)?;
         self.av_newer = crate::selfupdate::newer(l.catalog.av.as_ref()).cloned();
+        if let Some(msg) = &l.outdated {
+            eprintln!("{}", self.paint(format!("{msg}\nUntil then, av uses the last catalog it could read."), theme::AMBER));
+            // that says how to update already
+            self.av_newer = None;
+        }
         let mut titles: Vec<Title> = l.catalog.titles.into_values().collect();
         let rank = catalog::kind_rank;
         titles.sort_by(|a, b| (rank(&a.kind), a.title.to_lowercase()).cmp(&(rank(&b.kind), b.title.to_lowercase())));
@@ -258,6 +267,7 @@ impl Ctx {
                 catalog_url: self.url.clone(),
                 cache: self.paths.cache.clone(),
                 dest: dest.clone(),
+                saves: self.paths.saves(&t.id),
                 bin: self.paths.bin.clone(),
                 cancel: None,
             },
@@ -314,7 +324,7 @@ impl Ctx {
             };
             let kind = if i.kind.is_empty() { "game".to_string() } else { i.kind.clone() };
             let dest = self.paths.title_dir(&kind, &id);
-            match install::uninstall(&dest, self.paths.bin.as_deref(), &id) {
+            match install::uninstall(&dest, self.paths.bin.as_deref(), &id, &self.paths.saves(&id), true) {
                 Ok(()) => {
                     self.state.installed.remove(&id);
                     self.state.save()?;

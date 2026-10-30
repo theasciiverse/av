@@ -73,7 +73,7 @@ pub struct Known {
 impl Known {
     pub fn load(paths: &Paths) -> Known {
         let state = State::load(&paths.state);
-        let (titles, muds) = match catalog::cached(&paths.cache) {
+        let (titles, muds) = match catalog::cached(&paths.cache, &catalog::url()) {
             Some(c) => (
                 c.titles.keys().cloned().collect(),
                 c.titles.values().filter(|t| t.is_mud()).map(|t| t.id.clone()).collect(),

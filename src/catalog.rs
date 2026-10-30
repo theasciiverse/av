@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::time::{Duration, SystemTime};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use serde::Deserialize;
 
 pub const SCHEMA_VERSION: u32 = 1;
@@ -32,20 +32,19 @@ pub fn http() -> &'static ureq::Agent {
     })
 }
 
-#[derive(Debug, Deserialize)]
+/// A parsed catalog. Built title by title (see `parse`), so one bad entry
+/// is skipped instead of failing the lot.
+#[derive(Debug, Default)]
 pub struct Catalog {
     pub titles: BTreeMap<String, Title>,
     /// upstream projects holding several games, each game its own title
-    #[serde(default)]
     pub collections: BTreeMap<String, Collection>,
     /// the latest av, so an older one can say it is out of date
-    #[serde(default)]
     pub av: Option<AvRelease>,
 }
 
 /// The catalog's top-level `av` entry: av's latest release.
-#[derive(Debug, Clone, Default, Deserialize)]
-#[serde(default)]
+#[derive(Debug, Clone, Default)]
 pub struct AvRelease {
     pub version: String,
     pub date: String,
@@ -178,7 +177,7 @@ impl Title {
     /// The binary inside the install dir: `[exec]` names it, else the id.
     pub fn exec_name(&self) -> String {
         let base = self.exec.names.values().find_map(|v| v.as_str().map(String::from)).unwrap_or_else(|| self.id.clone());
-        if cfg!(windows) { format!("{base}.exe") } else { base }
+        if cfg!(windows) && !base.to_lowercase().ends_with(".exe") { format!("{base}.exe") } else { base }
     }
 
     /// The display name of the collection this game comes from.
@@ -244,61 +243,155 @@ pub struct Loaded {
     pub catalog: Catalog,
     /// true when the network failed and the cached copy is shown
     pub offline: bool,
+    /// set when the catalog at the address is too new for this av and its
+    /// cached copy is shown instead: what to tell the player
+    pub outdated: Option<String>,
 }
 
-fn parse(body: &str) -> Result<Catalog> {
-    // read the version first, so an unknown schema is refused by name, not as a parse error
-    #[derive(Deserialize)]
-    struct Head {
-        schema_version: u32,
-    }
-    let head: Head = serde_json::from_str(body).context("catalog.json is not valid JSON")?;
-    if head.schema_version != SCHEMA_VERSION {
-        bail!(
-            "the catalog is newer than this av understands (schema {}, av reads {}).\nUpdate av with:\n\n  {}",
-            head.schema_version,
-            SCHEMA_VERSION,
-            crate::selfupdate::how()
-        );
-    }
-    Ok(serde_json::from_str(body)?)
+/// The address av reads the catalog from.
+pub fn url() -> String {
+    std::env::var("AV_CATALOG_URL").unwrap_or_else(|_| DEFAULT_CATALOG_URL.into())
 }
 
-/// The cached catalog however old, without touching the network (for tab
-/// completion). None when there is no cache yet or it cannot be read.
-pub fn cached(cache_dir: &Path) -> Option<Catalog> {
-    parse(&std::fs::read_to_string(cache_dir.join("catalog.json")).ok()?).ok()
+/// One cache file per catalog address, so a cache of one catalog is never
+/// taken for another (pointing AV_CATALOG_URL elsewhere, offline or not).
+pub(crate) fn cache_file(cache_dir: &Path, url: &str) -> std::path::PathBuf {
+    cache_dir.join(format!("catalog-{:016x}.json", fnv1a(url)))
+}
+
+/// FNV-1a, a short stable hash for file names, without another dependency.
+pub fn fnv1a(s: &str) -> u64 {
+    s.bytes().fold(0xcbf2_9ce4_8422_2325, |h, b| (h ^ b as u64).wrapping_mul(0x0100_0000_01b3))
+}
+
+enum Parsed {
+    Ok(Catalog),
+    /// a schema this av doesn't read; the `av` entry is still read, to name the av that does
+    TooNew { schema: u64, av: Option<AvRelease> },
+}
+
+/// av's own entry, taken field by field: a missing, null or odd field must
+/// never stop the catalog from loading.
+fn av_entry(v: &serde_json::Value) -> Option<AvRelease> {
+    let o = v.get("av")?.as_object()?;
+    let field = |k: &str| o.get(k).and_then(|x| x.as_str()).map(|x| x.trim().to_string()).unwrap_or_default();
+    let version = field("version");
+    (!version.is_empty()).then(|| AvRelease { version, date: field("date"), notes: field("notes") })
+}
+
+/// Why a title can't be offered safely, if it can't: its id and kind name
+/// folders, its exec a file inside its own, a MUD's host is a telnet argument.
+fn unsafe_reason(t: &Title) -> Option<String> {
+    let name = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-');
+    if !name(&t.id) {
+        return Some(format!("id {:?} is not lowercase letters, digits and dashes", t.id));
+    }
+    if !name(&t.kind) {
+        return Some(format!("kind {:?} is not lowercase letters, digits and dashes", t.kind));
+    }
+    let exec = t.exec_name();
+    if exec.contains(['/', '\\']) || exec.starts_with('.') {
+        return Some(format!("exec {exec:?} is not a plain file name"));
+    }
+    if let Some(c) = &t.connect
+        && (c.host.starts_with('-') || c.host.contains(char::is_whitespace))
+    {
+        return Some(format!("host {:?} is not a host name", c.host));
+    }
+    None
+}
+
+fn parse(body: &str) -> Result<Parsed> {
+    let v: serde_json::Value = serde_json::from_str(body).context("catalog.json is not valid JSON")?;
+    let av = av_entry(&v);
+    let schema = v.get("schema_version").and_then(|s| s.as_u64()).context("catalog.json has no schema_version")?;
+    if schema != SCHEMA_VERSION as u64 {
+        return Ok(Parsed::TooNew { schema, av });
+    }
+    let mut titles = BTreeMap::new();
+    for (key, t) in v.get("titles").and_then(|t| t.as_object()).into_iter().flatten() {
+        match serde_json::from_value::<Title>(t.clone()) {
+            Ok(t) => match unsafe_reason(&t) {
+                None => {
+                    titles.insert(key.clone(), t);
+                }
+                Some(why) => log::warn!("catalog: skipped {key}: {why}"),
+            },
+            Err(e) => log::warn!("catalog: skipped {key}: {e}"),
+        }
+    }
+    let mut collections = BTreeMap::new();
+    for (key, c) in v.get("collections").and_then(|c| c.as_object()).into_iter().flatten() {
+        match serde_json::from_value::<Collection>(c.clone()) {
+            Ok(c) => {
+                collections.insert(key.clone(), c);
+            }
+            Err(e) => log::warn!("catalog: skipped collection {key}: {e}"),
+        }
+    }
+    Ok(Parsed::Ok(Catalog { titles, collections, av }))
+}
+
+/// What to say when the catalog is too new: which schema, the av that reads
+/// it when the catalog names one, and how to update.
+fn too_new(schema: u64, av: Option<&AvRelease>) -> String {
+    let which = av.map(|r| format!(" av {} reads it.", r.version)).unwrap_or_default();
+    format!(
+        "The catalog is newer than this av understands (schema {schema}, av {} reads {SCHEMA_VERSION}).{which}\nUpdate av with:\n\n  {}",
+        env!("CARGO_PKG_VERSION"),
+        crate::selfupdate::how()
+    )
+}
+
+fn read_cache(file: &Path) -> Option<Catalog> {
+    match parse(&std::fs::read_to_string(file).ok()?) {
+        Ok(Parsed::Ok(c)) => Some(c),
+        _ => None,
+    }
+}
+
+/// The cached catalog for `url` however old, without touching the network
+/// (for tab completion). None when there is none or it can't be read.
+pub fn cached(cache_dir: &Path, url: &str) -> Option<Catalog> {
+    read_cache(&cache_file(cache_dir, url))
 }
 
 /// Fetch the catalog, using the cache when it is fresh and when offline.
 pub fn load(url: &str, cache_dir: &Path, force: bool) -> Result<Loaded> {
-    let cache = cache_dir.join("catalog.json");
-    // the address it came from: a cache of another catalog is never fresh
-    let from = cache_dir.join("catalog.url");
-    let same = std::fs::read_to_string(&from).is_ok_and(|u| u.trim() == url);
-    let fresh = same
-        && std::fs::metadata(&cache)
-            .and_then(|m| m.modified())
-            .map(|t| SystemTime::now().duration_since(t).unwrap_or_default() < CACHE_TTL)
-            .unwrap_or(false);
-    if fresh && !force {
-        let body = std::fs::read_to_string(&cache)?;
-        log::info!("catalog from cache {}", cache.display());
-        return Ok(Loaded { catalog: parse(&body)?, offline: false });
+    let cache = cache_file(cache_dir, url);
+    // before the cache was kept per address: one file for whichever catalog
+    for old in ["catalog.json", "catalog.url"] {
+        let _ = std::fs::remove_file(cache_dir.join(old));
     }
-    match fetch(url) {
-        Ok(body) => {
-            let catalog = parse(&body)?;
-            std::fs::write(&cache, &body)?;
-            let _ = std::fs::write(&from, url);
+    let fresh = std::fs::metadata(&cache)
+        .and_then(|m| m.modified())
+        .is_ok_and(|t| SystemTime::now().duration_since(t).unwrap_or_default() < CACHE_TTL);
+    if fresh && !force {
+        if let Some(catalog) = read_cache(&cache) {
+            log::info!("catalog from cache {}", cache.display());
+            return Ok(Loaded { catalog, offline: false, outdated: None });
+        }
+        log::warn!("the cached catalog can't be read; fetching it again");
+    }
+    let fetched = fetch(url).and_then(|body| Ok((parse(&body)?, body)));
+    match fetched {
+        Ok((Parsed::Ok(catalog), body)) => {
+            crate::state::write_atomic(&cache, &body)?;
             log::info!("catalog fetched from {url}: {} titles", catalog.titles.len());
-            Ok(Loaded { catalog, offline: false })
+            Ok(Loaded { catalog, offline: false, outdated: None })
+        }
+        Ok((Parsed::TooNew { schema, av }, _)) => {
+            // keep the library working from the last catalog this av read
+            let msg = too_new(schema, av.as_ref());
+            log::warn!("catalog schema {schema} is too new");
+            let mut catalog = read_cache(&cache).with_context(|| msg.clone())?;
+            catalog.av = av.or(catalog.av);
+            Ok(Loaded { catalog, offline: false, outdated: Some(msg) })
         }
         Err(e) => {
             log::warn!("catalog fetch failed: {e:#}");
-            let body = std::fs::read_to_string(&cache)
-                .with_context(|| format!("cannot reach {url} and there is no cached catalog"))?;
-            Ok(Loaded { catalog: parse(&body)?, offline: true })
+            let catalog = read_cache(&cache).with_context(|| format!("cannot reach {url}, and there is no cached copy of it"))?;
+            Ok(Loaded { catalog, offline: true, outdated: None })
         }
     }
 }
@@ -328,19 +421,82 @@ mod tests {
         assert!(t.exec_name().starts_with("solitty"));
     }
 
-    #[test]
-    fn refuses_unknown_schema() {
-        let e = parse(r#"{"schema_version": 2, "titles": {}}"#).unwrap_err().to_string();
-        // it says which schema, and how to get an av that reads it
-        assert!(e.contains("schema 2"), "{e}");
-        assert!(e.contains("install") || e.contains("cargo"), "{e}");
+    fn catalog(body: &str) -> Catalog {
+        match parse(body).unwrap() {
+            Parsed::Ok(c) => c,
+            Parsed::TooNew { .. } => panic!("too new"),
+        }
     }
 
     #[test]
-    fn reads_the_latest_av() {
-        let c = parse(r#"{"schema_version": 1, "titles": {}, "av": {"version": "1.0.0", "notes": "- New"}}"#).unwrap();
+    fn a_newer_schema_is_told_apart_and_still_names_the_av() {
+        let body = r#"{"schema_version": 2, "titles": {}, "av": {"version": "2.0.0"}}"#;
+        let Parsed::TooNew { schema, av } = parse(body).unwrap() else { panic!("read a schema 2 catalog") };
+        assert_eq!((schema, av.as_ref().map(|r| r.version.as_str())), (2, Some("2.0.0")));
+        let msg = too_new(schema, av.as_ref());
+        assert!(msg.contains("schema 2") && msg.contains("av 2.0.0 reads it"), "{msg}");
+        assert!(msg.contains("install") || msg.contains("cargo"), "{msg}");
+    }
+
+    #[test]
+    fn reads_the_latest_av_whatever_its_fields() {
+        let c = catalog(r#"{"schema_version": 1, "titles": {}, "av": {"version": " 1.0.0 ", "notes": "- New"}}"#);
         assert_eq!(c.av.unwrap().version, "1.0.0");
-        // a catalog without the entry still reads
-        assert!(parse(r#"{"schema_version": 1, "titles": {}}"#).unwrap().av.is_none());
+        // a release without notes comes from GitHub as null; it must not stop the catalog
+        let c = catalog(r#"{"schema_version": 1, "titles": {}, "av": {"version": "1.0.0", "date": null, "notes": null}}"#);
+        assert_eq!(c.av.unwrap().notes, "");
+        assert!(catalog(r#"{"schema_version": 1, "titles": {}, "av": null}"#).av.is_none());
+        assert!(catalog(r#"{"schema_version": 1, "titles": {}, "av": {"version": 3}}"#).av.is_none());
+        assert!(catalog(r#"{"schema_version": 1, "titles": {}}"#).av.is_none());
+    }
+
+    #[test]
+    fn a_bad_or_unsafe_title_is_skipped_not_the_catalog() {
+        let c = catalog(
+            r#"{"schema_version": 1, "titles": {
+                "good": {"id": "good", "kind": "game"},
+                "broken": {"id": "broken", "kind": "game", "min_terminal": {"cols": 57}},
+                "empty": {"id": "", "kind": "game"},
+                "up": {"id": "..", "kind": "game"},
+                "path": {"id": "path", "kind": "game", "exec": {"game": "../../bin/sh"}},
+                "mud": {"id": "mud", "kind": "mud", "connect": {"host": "-oProxyCommand=x", "port": 23}}
+            }}"#,
+        );
+        assert_eq!(c.titles.keys().collect::<Vec<_>>(), ["good"]);
+    }
+
+    #[test]
+    fn the_cache_belongs_to_its_address() {
+        use crate::testutil::serve;
+        use std::collections::BTreeMap;
+        let dir = std::env::temp_dir().join(format!("av-catalog-cache-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let one = |id: &str| format!(r#"{{"schema_version": 1, "titles": {{"{id}": {{"id": "{id}", "kind": "game"}}}}}}"#).into_bytes();
+        let base = serve(BTreeMap::from([("/a.json".to_string(), one("a")), ("/b.json".to_string(), one("b")), ("/new.json".to_string(), br#"{"schema_version": 9, "titles": {}, "av": {"version": "9.0.0"}}"#.to_vec())]));
+        let (a, b) = (format!("{base}/a.json"), format!("{base}/b.json"));
+        let ids = |l: &Loaded| l.catalog.titles.keys().cloned().collect::<Vec<_>>();
+
+        assert_eq!(ids(&load(&a, &dir, false).unwrap()), ["a"]);
+        // another address within the hour gets its own catalog, not a's cache
+        assert_eq!(ids(&load(&b, &dir, false).unwrap()), ["b"]);
+        // offline, an address with no cache of its own says so instead of showing another's
+        let dead = "http://127.0.0.1:9/c.json";
+        assert!(load(dead, &dir, false).is_err());
+        assert!(cached(&dir, dead).is_none());
+        assert_eq!(cached(&dir, &a).map(|c| c.titles.len()), Some(1));
+
+        // a cache cut short is fetched again, not an error for an hour
+        std::fs::write(cache_file(&dir, &a), "{\"schema_version\": 1, \"tit").unwrap();
+        assert_eq!(ids(&load(&a, &dir, false).unwrap()), ["a"]);
+
+        // a catalog too new for this av: the last one it read, marked so
+        let new = format!("{base}/new.json");
+        std::fs::copy(cache_file(&dir, &a), cache_file(&dir, &new)).unwrap();
+        let l = load(&new, &dir, true).unwrap();
+        assert_eq!(ids(&l), ["a"]);
+        assert!(l.outdated.unwrap().contains("schema 9"));
+        assert_eq!(l.catalog.av.unwrap().version, "9.0.0");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

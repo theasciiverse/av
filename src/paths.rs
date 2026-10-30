@@ -58,6 +58,12 @@ impl Paths {
         self.install.join(format!("{kind}s")).join(id)
     }
 
+    /// Where an uninstalled title's own files (saves, scores, settings it
+    /// wrote next to itself) wait for a reinstall.
+    pub fn saves(&self, id: &str) -> PathBuf {
+        self.state.join("saves").join(id)
+    }
+
     /// Whether `~/.local/bin` is on `$PATH`; `av` says so, it never edits rc files.
     pub fn bin_on_path(&self) -> bool {
         let Some(bin) = &self.bin else { return true };

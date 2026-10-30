@@ -268,6 +268,7 @@ fn welcomed_file(config: &std::path::Path) -> std::path::PathBuf {
 impl App {
     pub fn new(paths: Paths, catalog_url: String) -> Self {
         let state = State::load(&paths.state);
+        let set_aside = state.set_aside.clone();
         let show = Show::load(&paths.config);
         let welcome_due = !welcomed_file(&paths.config).exists();
         let (tx, rx) = channel();
@@ -316,6 +317,13 @@ impl App {
             intro: Some(Instant::now()),
             welcome_due,
         };
+        if !set_aside.is_empty() {
+            // shown once the intro is over; the files are kept for a look
+            app.modal = Some(Modal::Message(format!(
+                "Part of your library could not be read, so it was set aside and av starts from an empty list:\n\n{}",
+                set_aside.join("\n")
+            )));
+        }
         app.refresh(false);
         app
     }
@@ -354,7 +362,13 @@ impl App {
                 self.titles = titles;
                 self.collections = l.catalog.collections;
                 self.offline = l.offline;
-                if l.offline {
+                if let Some(msg) = &l.outdated {
+                    // the last catalog this av could read: the library still works
+                    self.status = "the catalog is newer than this av; showing the last one it read (F1 says how to update)".into();
+                    if self.modal.is_none() {
+                        self.modal = Some(Modal::Message(msg.clone()));
+                    }
+                } else if l.offline {
                     // for this run only: show.json keeps the player's own choice
                     self.installed_saved.get_or_insert(self.show.installed);
                     self.show.installed = true;
@@ -365,7 +379,8 @@ impl App {
             }
             Err(e) => {
                 log::error!("catalog: {e:#}");
-                self.status = format!("{e:#}");
+                // the status bar is one line; the note below has the whole message
+                self.status = format!("{e:#}").lines().next().unwrap_or_default().to_string();
                 // not over the welcome screen; the status line and the empty list say it then
                 if self.modal.is_none() {
                     self.modal = Some(Modal::Message(format!("Could not load the catalog.\n\n{e:#}")));
@@ -523,6 +538,7 @@ impl App {
                 catalog_url: self.catalog_url.clone(),
                 cache: self.paths.cache.clone(),
                 dest: self.paths.title_dir(&t.kind, &t.id),
+                saves: self.paths.saves(&t.id),
                 bin: self.paths.bin.clone(),
                 cancel: Some(cancel),
             },
@@ -811,7 +827,7 @@ impl App {
         let url = catalog::resolve(&self.catalog_url, url);
         // keyed by URL too: a re-recorded cast gets a new URL from the catalog
         // build, and must not be shadowed by the old file in the cache
-        let file = self.paths.cache.join("casts").join(format!("{}-{:016x}.cast", t.id, fnv1a(&url)));
+        let file = self.paths.cache.join("casts").join(format!("{}-{:016x}.cast", t.id, catalog::fnv1a(&url)));
         let (tx, id) = (self.cast_tx.clone(), t.id.clone());
         std::thread::spawn(move || {
             let res = (|| -> anyhow::Result<Cast> {
@@ -820,7 +836,7 @@ impl App {
                     Err(_) => {
                         let s = catalog::http().get(&url).call()?.body_mut().with_config().limit(256 << 20).read_to_string()?;
                         std::fs::create_dir_all(file.parent().unwrap())?;
-                        std::fs::write(&file, &s)?;
+                        crate::state::write_atomic(&file, &s)?;
                         s
                     }
                 };
@@ -1278,16 +1294,17 @@ impl App {
                 KeyCode::Enter => {
                     let Some(t) = self.titles.iter().find(|t| t.id == id).cloned() else { return };
                     let dest = self.paths.title_dir(&t.kind, &t.id);
-                    match install::uninstall(&dest, self.paths.bin.as_deref(), &t.id) {
+                    let keep = self.uninstall_keep_data;
+                    match install::uninstall(&dest, self.paths.bin.as_deref(), &t.id, &self.paths.saves(&t.id), keep) {
                         Ok(()) => {
                             self.state.installed.remove(&id);
                             self.save();
-                            self.status = if self.uninstall_keep_data {
-                                format!("uninstalled {id}; its saves and settings were kept")
+                            self.status = if keep {
+                                format!("uninstalled {id}; its saves and settings were kept for a reinstall")
                             } else {
-                                // titles keep their data in their own config/data dirs;
-                                // the manifest does not say where yet, so av cannot remove it
-                                format!("uninstalled {id}; removing save data is not supported yet, nothing else was deleted")
+                                // titles may also keep data in their own config folders;
+                                // the manifest does not say where, so av leaves those
+                                format!("uninstalled {id} with the saves it kept in its folder; anything it keeps elsewhere is untouched")
                             };
                             self.action = 0;
                         }
@@ -1299,11 +1316,6 @@ impl App {
             },
         }
     }
-}
-
-/// FNV-1a, enough to tell cache keys apart without another dependency.
-fn fnv1a(s: &str) -> u64 {
-    s.bytes().fold(0xcbf2_9ce4_8422_2325, |h, b| (h ^ b as u64).wrapping_mul(0x0100_0000_01b3))
 }
 
 #[cfg(test)]
@@ -1340,14 +1352,16 @@ mod tests {
         let paths = Paths { install: dir.join("data"), state: dir.join("data"), cache: dir.join("cache"), config: dir.join("config"), bin: None };
         std::fs::create_dir_all(&paths.cache).unwrap();
         let catalog = r#"{"schema_version":1,"titles":{"a":{"id":"a","title":"A","kind":"game"}}}"#;
-        std::fs::write(paths.cache.join("catalog.json"), catalog).unwrap();
+        let url = "http://127.0.0.1:9/catalog.json";
+        let file = catalog::cache_file(&paths.cache, url);
+        std::fs::write(&file, catalog).unwrap();
         // older than the cache's hour, so av tries the network first
         let old = std::time::SystemTime::now() - std::time::Duration::from_secs(2 * 3600);
-        std::fs::File::options().write(true).open(paths.cache.join("catalog.json")).unwrap().set_modified(old).unwrap();
+        std::fs::File::options().write(true).open(&file).unwrap().set_modified(old).unwrap();
         let saved = |app: &App| Show::load(&app.paths.config).installed;
 
         // nothing listens on port 9, so the fetch fails and the cache is used
-        let mut app = App::new(paths, "http://127.0.0.1:9/catalog.json".into());
+        let mut app = App::new(paths, url.into());
         while app.is_loading() {
             std::thread::sleep(std::time::Duration::from_millis(10));
             app.tick();

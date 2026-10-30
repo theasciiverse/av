@@ -2,6 +2,7 @@
 //! progress over a channel. Every archive is checked against the catalog's
 //! sha256 before anything is extracted.
 
+use std::collections::HashSet;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -26,6 +27,8 @@ pub struct Job {
     pub catalog_url: String,
     pub cache: PathBuf,
     pub dest: PathBuf,
+    /// the title's own files kept from an uninstall, put back by this install
+    pub saves: PathBuf,
     pub bin: Option<PathBuf>,
     /// set from outside to stop the download; checked per chunk
     pub cancel: Option<Arc<AtomicBool>>,
@@ -97,19 +100,21 @@ fn run(job: &Job, tx: &Sender<Progress>) -> Result<Installed> {
     // never leaves a half-written install
     let parent = job.dest.parent().context("bad install path")?;
     std::fs::create_dir_all(parent)?;
-    let staging = parent.join(format!(".{}.new", t.id));
-    let _ = std::fs::remove_dir_all(&staging);
+    recover(&job.dest)?;
+    let staging = sibling(&job.dest, "new");
+    // only ever the archive's files: the title's own are never moved here
+    let _ = remove_all(&staging);
     std::fs::create_dir_all(&staging)?;
     extract(&archive, &name, &staging)?;
     let exe = find_exec(&staging, &t.exec_name()).with_context(|| format!("{} not found in the archive", t.exec_name()))?;
     set_executable(&exe)?;
-    // an update keeps what the title wrote next to itself (saves, scores,
-    // config): anything in the old install that the new archive lacks
-    if job.dest.is_dir() {
-        carry_over(&job.dest, &staging).context("keep files from the previous install")?;
+    write_shipped(&staging)?;
+    swap_in(&staging, &job.dest)?;
+    // files the title wrote before an uninstall come back with it
+    if job.saves.is_dir() {
+        carry_over(&job.saves, &job.dest, None).context("put back the files kept at uninstall")?;
+        let _ = remove_all(&job.saves);
     }
-    let _ = std::fs::remove_dir_all(&job.dest);
-    std::fs::rename(&staging, &job.dest)?;
     let exe = job.dest.join(exe.strip_prefix(&staging)?);
 
     if let Some(bin) = &job.bin {
@@ -140,20 +145,146 @@ fn extract(archive: &Path, name: &str, dest: &Path) -> Result<()> {
     Ok(())
 }
 
+/// The list of the archive's files, kept in the install folder, so an update
+/// or an uninstall can tell them from the files the title wrote itself.
+const SHIPPED: &str = ".av-shipped";
+
+/// `.<id>.new` or `.<id>.old` beside an install folder.
+fn sibling(dest: &Path, what: &str) -> PathBuf {
+    let id = dest.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    dest.with_file_name(format!(".{id}.{what}"))
+}
+
+fn write_shipped(dir: &Path) -> Result<()> {
+    let mut files = Vec::new();
+    walk(dir, Path::new(""), &mut files)?;
+    let list: String = files.iter().map(|p| format!("{}\n", p.to_string_lossy().replace('\\', "/"))).collect();
+    std::fs::write(dir.join(SHIPPED), list)?;
+    Ok(())
+}
+
+fn walk(dir: &Path, rel: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
+    for entry in std::fs::read_dir(dir.join(rel))? {
+        let entry = entry?;
+        let r = rel.join(entry.file_name());
+        if entry.file_type()?.is_dir() { walk(dir, &r, out)? } else { out.push(r) }
+    }
+    Ok(())
+}
+
+/// The archive's files as recorded at install, or None for an install made
+/// before av kept the list.
+fn shipped(dir: &Path) -> Option<HashSet<PathBuf>> {
+    let s = std::fs::read_to_string(dir.join(SHIPPED)).ok()?;
+    Some(s.lines().filter(|l| !l.is_empty()).map(PathBuf::from).collect())
+}
+
+/// Put `staging` in place of `dest`. The old install is moved aside, not
+/// deleted, until the new one is in and the title's own files are carried
+/// over; if the swap fails, the old one goes back.
+fn swap_in(staging: &Path, dest: &Path) -> Result<()> {
+    if !dest.exists() {
+        std::fs::rename(staging, dest)?;
+        return Ok(());
+    }
+    let old = sibling(dest, "old");
+    std::fs::rename(dest, &old).context("move the previous install aside (is the title running?)")?;
+    if let Err(e) = std::fs::rename(staging, dest) {
+        let _ = std::fs::rename(&old, dest);
+        return Err(e).context("put the new install in place");
+    }
+    finish_swap(&old, dest)
+}
+
+/// The title's own files from the old install into the new one, then the
+/// old one away. Until that has worked, the old folder stays, and the next
+/// install or update finishes the job (see `recover`).
+fn finish_swap(old: &Path, dest: &Path) -> Result<()> {
+    carry_over(old, dest, shipped(old).as_ref()).context("keep the title's own files from the previous install")?;
+    // the new install is in and complete: a leftover is tidied next time
+    if let Err(e) = remove_all(old) {
+        log::warn!("could not remove {}: {e}", old.display());
+    }
+    Ok(())
+}
+
+/// remove_dir_all, also through folders an archive shipped read-only.
+fn remove_all(dir: &Path) -> std::io::Result<()> {
+    match std::fs::remove_dir_all(dir) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+            make_writable(dir);
+            std::fs::remove_dir_all(dir)
+        }
+        r => r,
+    }
+}
+
+fn make_writable(dir: &Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if std::fs::symlink_metadata(dir).is_ok_and(|m| m.is_dir()) {
+            let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o755));
+            for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+                make_writable(&e.path());
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    for e in walkdir_files(dir) {
+        if let Ok(m) = std::fs::metadata(&e) {
+            let mut p = m.permissions();
+            #[allow(clippy::permissions_set_readonly_false)]
+            p.set_readonly(false);
+            let _ = std::fs::set_permissions(&e, p);
+        }
+    }
+}
+
+#[cfg(not(unix))]
+fn walkdir_files(dir: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let _ = walk(dir, Path::new(""), &mut out);
+    out.into_iter().map(|r| dir.join(r)).collect()
+}
+
+/// An update cut short (av killed, the power gone) leaves `.<id>.old`:
+/// finished when the new install is in, undone when it isn't.
+fn recover(dest: &Path) -> Result<()> {
+    let old = sibling(dest, "old");
+    if !old.exists() {
+        return Ok(());
+    }
+    log::warn!("finishing an update that was cut short: {}", old.display());
+    if dest.exists() { finish_swap(&old, dest) } else { Ok(std::fs::rename(&old, dest)?) }
+}
+
 /// Move every file or folder under `old` that has no counterpart under `new`
 /// into `new`, keeping its relative path. Folders present in both are merged
 /// the same way; files present in both keep the new archive's copy. Both sit
-/// in the same parent folder, so these are renames, not copies. A file an
-/// older release shipped and a newer one dropped is carried over too: a stray
-/// file is harmless, a lost save is not.
-fn carry_over(old: &Path, new: &Path) -> Result<()> {
-    for entry in std::fs::read_dir(old)? {
+/// in the same parent folder, so these are renames, not copies. With the
+/// old install's list of shipped files, only the title's own files move;
+/// without one (an install from before the list), everything the new
+/// archive lacks does: a stray file is harmless, a lost save is not.
+fn carry_over(old: &Path, new: &Path, shipped: Option<&HashSet<PathBuf>>) -> Result<()> {
+    carry(old, new, Path::new(""), shipped)
+}
+
+fn carry(old: &Path, new: &Path, rel: &Path, shipped: Option<&HashSet<PathBuf>>) -> Result<()> {
+    for entry in std::fs::read_dir(old.join(rel))? {
         let entry = entry?;
-        let (from, to) = (entry.path(), new.join(entry.file_name()));
+        let r = rel.join(entry.file_name());
+        if r == Path::new(SHIPPED) || shipped.is_some_and(|s| s.contains(&r)) {
+            continue;
+        }
+        let (from, to) = (old.join(&r), new.join(&r));
         let to_meta = std::fs::symlink_metadata(&to);
-        if entry.file_type()?.is_dir() && to_meta.as_ref().is_ok_and(|m| m.is_dir()) {
-            carry_over(&from, &to)?;
+        if entry.file_type()?.is_dir() && (to_meta.as_ref().is_ok_and(|m| m.is_dir()) || shipped.is_some()) {
+            // with a list, a folder may hold both kinds: go through it
+            std::fs::create_dir_all(&to)?;
+            carry(old, new, &r, shipped)?;
         } else if to_meta.is_err() {
+            std::fs::create_dir_all(to.parent().unwrap_or(new))?;
             std::fs::rename(&from, &to)?;
         }
     }
@@ -161,12 +292,14 @@ fn carry_over(old: &Path, new: &Path) -> Result<()> {
 }
 
 /// The binary may sit at the top of the archive or inside one directory.
+/// It must be a real file: a symlink in an archive could point anywhere.
 pub fn find_exec(dir: &Path, name: &str) -> Option<PathBuf> {
+    let file = |p: &Path| std::fs::symlink_metadata(p).is_ok_and(|m| m.is_file());
     let top = dir.join(name);
-    if top.is_file() {
+    if file(&top) {
         return Some(top);
     }
-    std::fs::read_dir(dir).ok()?.flatten().map(|e| e.path().join(name)).find(|p| p.is_file())
+    std::fs::read_dir(dir).ok()?.flatten().filter(|e| e.file_type().is_ok_and(|t| t.is_dir())).map(|e| e.path().join(name)).find(|p| file(p))
 }
 
 /// Set the executable bit explicitly instead of trusting the archive.
@@ -201,16 +334,29 @@ fn link(bin: &Path, id: &str, exe: &Path) -> Result<()> {
     Ok(())
 }
 
-pub fn uninstall(dest: &Path, bin: Option<&Path>, id: &str) -> Result<()> {
+/// Remove a title. With `keep`, the files it wrote itself in its install
+/// folder (saves, scores, settings) move there first, for a reinstall to
+/// put back; without, they go too, and so do any kept from before.
+pub fn uninstall(dest: &Path, bin: Option<&Path>, id: &str, saves: &Path, keep: bool) -> Result<()> {
     if let Some(bin) = bin {
         let l = bin.join(id);
         if std::fs::read_link(&l).map(|t| t.starts_with(dest)).unwrap_or(false) {
             std::fs::remove_file(&l)?;
         }
     }
+    recover(dest)?;
     if dest.exists() {
-        std::fs::remove_dir_all(dest)?;
+        if keep {
+            std::fs::create_dir_all(saves)?;
+            carry_over(dest, saves, shipped(dest).as_ref()).context("keep the title's own files")?;
+        }
+        remove_all(dest)?;
     }
+    if !keep {
+        let _ = remove_all(saves);
+    }
+    // an empty folder means nothing of the title's own was there
+    let _ = std::fs::remove_dir(saves);
     Ok(())
 }
 
@@ -220,51 +366,30 @@ fn hex(b: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{Job, carry_over, extract, find_exec, run, uninstall};
+    use super::{Job, carry_over, extract, find_exec, recover, run, sibling, uninstall};
+    use crate::testutil::serve;
     use crate::catalog::{self, Title};
     use std::collections::BTreeMap;
     use std::fs;
-    use std::io::{BufRead, BufReader, Write};
-    use std::net::TcpListener;
+    use std::io::Write;
     use std::path::{Path, PathBuf};
     use std::sync::mpsc::channel;
 
-    /// A tiny HTTP server on 127.0.0.1 that serves `files` by path, for as
-    /// long as the test runs. Returns its base URL.
-    fn serve(files: BTreeMap<String, Vec<u8>>) -> String {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let base = format!("http://{}", listener.local_addr().unwrap());
-        std::thread::spawn(move || {
-            for stream in listener.incoming() {
-                let Ok(mut stream) = stream else { continue };
-                let mut line = String::new();
-                if BufReader::new(&stream).read_line(&mut line).is_err() {
-                    continue;
-                }
-                let path = line.split_whitespace().nth(1).unwrap_or("/").to_string();
-                let head = |status: &str, len: usize| format!("HTTP/1.1 {status}\r\nContent-Length: {len}\r\nConnection: close\r\n\r\n");
-                match files.get(&path) {
-                    Some(body) => {
-                        let _ = stream.write_all(head("200 OK", body.len()).as_bytes());
-                        let _ = stream.write_all(body);
-                    }
-                    None => {
-                        let _ = stream.write_all(head("404 Not Found", 0).as_bytes());
-                    }
-                }
-            }
-        });
-        base
-    }
+    /// The binary's name in an archive, as `Title::exec_name` looks for it.
+    const EXE: &str = std::env::consts::EXE_SUFFIX;
 
     /// A release archive as the catalog expects: the binary one folder down,
     /// executable, beside a data file.
     fn tar_gz(binary: &str, data: &str) -> Vec<u8> {
+        tar_gz_with(&[(&format!("game/game{EXE}"), binary), ("game/data.txt", data)])
+    }
+
+    fn tar_gz_with(files: &[(&str, &str)]) -> Vec<u8> {
         let mut out = tar::Builder::new(flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast()));
-        for (path, body, mode) in [("game/game", binary, 0o755), ("game/data.txt", data, 0o644)] {
+        for (path, body) in files {
             let mut h = tar::Header::new_gnu();
             h.set_size(body.len() as u64);
-            h.set_mode(mode);
+            h.set_mode(if path.contains("data") || path.contains(".txt") { 0o644 } else { 0o755 });
             h.set_cksum();
             out.append_data(&mut h, path, body.as_bytes()).unwrap();
         }
@@ -301,8 +426,22 @@ mod tests {
         fn bin(&self) -> PathBuf {
             self.root.join("bin")
         }
+        fn saves(&self) -> PathBuf {
+            self.root.join("saves/game")
+        }
+        fn exe(&self) -> PathBuf {
+            self.dest().join(format!("game/game{EXE}"))
+        }
         fn job(&self, title: Title, catalog_url: &str) -> Job {
-            Job { title, catalog_url: catalog_url.into(), cache: self.root.join("cache"), dest: self.dest(), bin: Some(self.bin()), cancel: None }
+            Job {
+                title,
+                catalog_url: catalog_url.into(),
+                cache: self.root.join("cache"),
+                dest: self.dest(),
+                saves: self.saves(),
+                bin: Some(self.bin()),
+                cancel: None,
+            }
         }
     }
 
@@ -328,7 +467,7 @@ mod tests {
         // install: the archive's url is relative to the catalog's host, as on the website
         let done = run(&home.job(title("1.0", "/r/game-1.tar.gz", &sha1), &catalog_url), &tx).unwrap();
         assert_eq!((done.version.as_str(), done.sha256.as_str()), ("1.0", sha1.as_str()));
-        let exe = home.dest().join("game/game");
+        let exe = home.exe();
         assert_eq!(read(&exe), "binary 1");
         #[cfg(unix)]
         {
@@ -347,9 +486,158 @@ mod tests {
         assert_eq!(read(&home.dest().join("game/data.txt")), "data 2");
         assert_eq!(read(&home.dest().join("game/save.dat")), "my save");
 
-        uninstall(&home.dest(), Some(&home.bin()), "game").unwrap();
+        uninstall(&home.dest(), Some(&home.bin()), "game", &home.saves(), false).unwrap();
         assert!(!home.dest().exists());
+        assert!(!home.saves().exists(), "remove takes the title's own files too");
         assert!(home.bin().join("game").symlink_metadata().is_err(), "the link is gone");
+    }
+
+    #[test]
+    fn uninstall_keeps_the_titles_own_files_for_a_reinstall() {
+        let v1 = tar_gz("binary 1", "data 1");
+        let sha1 = sha(&v1);
+        let base = serve(BTreeMap::from([("/r/game-1.tar.gz".to_string(), v1)]));
+        let catalog_url = format!("{base}/catalog.json");
+        let home = Home::new("keep");
+        let (tx, _rx) = channel();
+        run(&home.job(title("1.0", "/r/game-1.tar.gz", &sha1), &catalog_url), &tx).unwrap();
+        fs::write(home.dest().join("game/empire.sav"), "a save").unwrap();
+        fs::create_dir_all(home.dest().join("game/nki")).unwrap();
+        fs::write(home.dest().join("game/nki/custom.nki"), "player's own").unwrap();
+
+        uninstall(&home.dest(), Some(&home.bin()), "game", &home.saves(), true).unwrap();
+        assert!(!home.dest().exists());
+        assert_eq!(read(&home.saves().join("game/empire.sav")), "a save");
+        assert_eq!(read(&home.saves().join("game/nki/custom.nki")), "player's own");
+        assert!(!home.saves().join("game/data.txt").exists(), "the archive's own files are not kept");
+        assert!(!home.saves().join(format!("game/game{EXE}")).exists());
+
+        run(&home.job(title("1.0", "/r/game-1.tar.gz", &sha1), &catalog_url), &tx).unwrap();
+        assert_eq!(read(&home.dest().join("game/empire.sav")), "a save", "a reinstall puts them back");
+        assert_eq!(read(&home.dest().join("game/nki/custom.nki")), "player's own");
+        assert!(!home.saves().exists());
+    }
+
+    #[test]
+    fn an_update_drops_files_the_old_release_shipped_but_keeps_saves() {
+        let v1 = tar_gz_with(&[(&format!("game/game{EXE}"), "binary 1"), ("game/data.txt", "data 1"), ("game/old.txt", "gone in 2")]);
+        let v2 = tar_gz("binary 2", "data 2");
+        let (sha1, sha2) = (sha(&v1), sha(&v2));
+        let base = serve(BTreeMap::from([("/r/1.tar.gz".to_string(), v1), ("/r/2.tar.gz".to_string(), v2)]));
+        let catalog_url = format!("{base}/catalog.json");
+        let home = Home::new("dropped");
+        let (tx, _rx) = channel();
+        run(&home.job(title("1.0", "/r/1.tar.gz", &sha1), &catalog_url), &tx).unwrap();
+        fs::write(home.dest().join("game/save.dat"), "my save").unwrap();
+        run(&home.job(title("2.0", "/r/2.tar.gz", &sha2), &catalog_url), &tx).unwrap();
+        assert_eq!(read(&home.dest().join("game/save.dat")), "my save");
+        assert!(!home.dest().join("game/old.txt").exists(), "a file 1.0 shipped and 2.0 doesn't is not carried");
+        assert!(!sibling(&home.dest(), "old").exists());
+    }
+
+    #[test]
+    fn an_update_cut_short_is_finished_by_the_next_one() {
+        let v1 = tar_gz("binary 1", "data 1");
+        let sha1 = sha(&v1);
+        let base = serve(BTreeMap::from([("/r/1.tar.gz".to_string(), v1)]));
+        let catalog_url = format!("{base}/catalog.json");
+        let home = Home::new("cut-short");
+        let (tx, _rx) = channel();
+        run(&home.job(title("1.0", "/r/1.tar.gz", &sha1), &catalog_url), &tx).unwrap();
+        fs::write(home.dest().join("game/save.dat"), "my save").unwrap();
+
+        // killed right after moving the old install aside: nothing in place
+        fs::rename(home.dest(), sibling(&home.dest(), "old")).unwrap();
+        recover(&home.dest()).unwrap();
+        assert_eq!(read(&home.dest().join("game/save.dat")), "my save", "undone: the old install is back");
+
+        // killed after the new one went in, before the saves moved across
+        let old = sibling(&home.dest(), "old");
+        fs::rename(home.dest(), &old).unwrap();
+        run(&home.job(title("1.0", "/r/1.tar.gz", &sha1), &catalog_url), &tx).unwrap_or_else(|e| panic!("{e:#}"));
+        assert_eq!(read(&home.dest().join("game/save.dat")), "my save");
+        assert!(!old.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_update_that_cannot_change_the_install_folder_leaves_it_alone() {
+        use std::os::unix::fs::PermissionsExt;
+        let v1 = tar_gz("binary 1", "data 1");
+        let sha1 = sha(&v1);
+        let base = serve(BTreeMap::from([("/r/1.tar.gz".to_string(), v1)]));
+        let catalog_url = format!("{base}/catalog.json");
+        let home = Home::new("locked");
+        let (tx, _rx) = channel();
+        run(&home.job(title("1.0", "/r/1.tar.gz", &sha1), &catalog_url), &tx).unwrap();
+        fs::write(home.dest().join("game/save.dat"), "my save").unwrap();
+        // the games folder can't be changed, as a locked file would on Windows
+        let games = home.root.join("games");
+        fs::set_permissions(&games, fs::Permissions::from_mode(0o555)).unwrap();
+        let r = run(&home.job(title("1.0", "/r/1.tar.gz", &sha1), &catalog_url), &tx);
+        fs::set_permissions(&games, fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(r.is_err());
+        assert_eq!(read(&home.dest().join("game/save.dat")), "my save");
+        assert_eq!(read(&home.exe()), "binary 1");
+        // and the next try works
+        run(&home.job(title("1.0", "/r/1.tar.gz", &sha1), &catalog_url), &tx).unwrap();
+        assert_eq!(read(&home.dest().join("game/save.dat")), "my save");
+    }
+
+    /// The review's case: an archive with a read-only folder made deleting
+    /// the old install fail half way, and the next update deleted the saves.
+    #[cfg(unix)]
+    #[test]
+    fn an_archive_with_a_read_only_folder_updates_and_keeps_saves() {
+        let mut b = tar::Builder::new(flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast()));
+        for (path, body, mode, dir) in [("game/", "", 0o555, true), (&*format!("game/game{EXE}"), "binary", 0o755, false), ("game/ro/", "", 0o555, true), ("game/ro/f.txt", "x", 0o444, false)] {
+            let mut h = tar::Header::new_gnu();
+            h.set_entry_type(if dir { tar::EntryType::Directory } else { tar::EntryType::Regular });
+            h.set_size(body.len() as u64);
+            h.set_mode(mode);
+            h.set_cksum();
+            b.append_data(&mut h, path, body.as_bytes()).unwrap();
+        }
+        let archive = b.into_inner().unwrap().finish().unwrap();
+        let sha1 = sha(&archive);
+        let base = serve(BTreeMap::from([("/r/1.tar.gz".to_string(), archive)]));
+        let catalog_url = format!("{base}/catalog.json");
+        let home = Home::new("read-only");
+        let (tx, _rx) = channel();
+        run(&home.job(title("1.0", "/r/1.tar.gz", &sha1), &catalog_url), &tx).unwrap();
+        // the title writes its save beside itself (its folder is read-only, so next to it)
+        fs::write(home.dest().join("save.dat"), "my save").unwrap();
+        for _ in 0..2 {
+            run(&home.job(title("1.0", "/r/1.tar.gz", &sha1), &catalog_url), &tx).unwrap_or_else(|e| panic!("{e:#}"));
+            assert_eq!(read(&home.dest().join("save.dat")), "my save");
+        }
+        assert!(!sibling(&home.dest(), "old").exists(), "the old install was removed despite its read-only folders");
+        uninstall(&home.dest(), Some(&home.bin()), "game", &home.saves(), false).unwrap();
+        assert!(!home.dest().exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_binary_that_is_a_symlink_is_refused() {
+        use std::os::unix::fs::PermissionsExt;
+        let home = Home::new("symlink");
+        let secret = home.root.join("secret");
+        fs::write(&secret, "private").unwrap();
+        fs::set_permissions(&secret, fs::Permissions::from_mode(0o600)).unwrap();
+        let mut b = tar::Builder::new(flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast()));
+        let mut h = tar::Header::new_gnu();
+        h.set_entry_type(tar::EntryType::Symlink);
+        h.set_size(0);
+        h.set_cksum();
+        b.append_link(&mut h, "game/game", &secret).unwrap();
+        let archive = b.into_inner().unwrap().finish().unwrap();
+        let sha1 = sha(&archive);
+        let base = serve(BTreeMap::from([("/r/1.tar.gz".to_string(), archive)]));
+        let (tx, _rx) = channel();
+        let err = run(&home.job(title("1.0", "/r/1.tar.gz", &sha1), &format!("{base}/catalog.json")), &tx).unwrap_err();
+        assert!(err.to_string().contains("not found in the archive"), "{err:#}");
+        assert_eq!(fs::metadata(&secret).unwrap().permissions().mode() & 0o777, 0o600, "the target was not touched");
+        assert!(home.bin().join("game").symlink_metadata().is_err());
     }
 
     #[test]
@@ -377,7 +665,7 @@ mod tests {
         run(&home.job(title("1.0", "/r/game-1.tar.gz", &sha1), &catalog_url), &tx).unwrap();
         // version 2's archive is missing from the server
         assert!(run(&home.job(title("2.0", "/r/game-2.tar.gz", &sha1), &catalog_url), &tx).is_err());
-        assert_eq!(read(&home.dest().join("game/game")), "binary 1");
+        assert_eq!(read(&home.exe()), "binary 1");
     }
 
     #[test]
@@ -419,7 +707,7 @@ mod tests {
         fs::write(new.join("game"), "new binary").unwrap();
         fs::write(new.join("nki/vanilla.nki"), "new data").unwrap();
 
-        carry_over(&old, &new).unwrap();
+        carry_over(&old, &new, None).unwrap();
 
         let read = |p: &str| fs::read_to_string(new.join(p)).unwrap();
         assert_eq!(read("game"), "new binary");
