@@ -396,8 +396,15 @@ pub fn load(url: &str, cache_dir: &Path, force: bool) -> Result<Loaded> {
     }
 }
 
+/// A small file from the network (the catalog, a preview), given up on
+/// when it stops coming.
+pub fn get_text(url: &str, limit: u64) -> Result<String> {
+    let mut resp = http().get(url).config().timeout_recv_body(Some(Duration::from_secs(60))).build().call()?;
+    Ok(resp.body_mut().with_config().limit(limit).read_to_string()?)
+}
+
 fn fetch(url: &str) -> Result<String> {
-    Ok(http().get(url).call()?.body_mut().with_config().limit(64 << 20).read_to_string()?)
+    get_text(url, 64 << 20)
 }
 
 #[cfg(test)]

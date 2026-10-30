@@ -335,6 +335,8 @@ impl App {
         if self.loading.is_some() {
             return;
         }
+        // previews that failed (a network drop while browsing) get another go
+        self.cast_failed.clear();
         let (tx, rx) = channel();
         let (url, cache) = (self.catalog_url.clone(), self.paths.cache.clone());
         std::thread::spawn(move || {
@@ -526,9 +528,9 @@ impl App {
     /// Start the next queued download if nothing runs.
     fn pump(&mut self) {
         let Some(d) = self.downloads.start_next() else { return };
-        let (id, cancel) = (d.id.clone(), d.cancel.clone());
+        let (id, cancel, job) = (d.id.clone(), d.cancel.clone(), d.job);
         let Some(t) = self.titles.iter().find(|t| t.id == id).cloned() else {
-            self.downloads.fail(&id, "no longer in the catalog".into());
+            self.downloads.fail(job, "no longer in the catalog".into());
             return self.pump();
         };
         log::info!("download start {id}");
@@ -541,6 +543,7 @@ impl App {
                 saves: self.paths.saves(&t.id),
                 bin: self.paths.bin.clone(),
                 cancel: Some(cancel),
+                job,
             },
             self.tx.clone(),
         );
@@ -606,7 +609,11 @@ impl App {
                 Some(PaneRow::Offer(id)) => {
                     self.not_now.insert(id);
                 }
-                Some(PaneRow::Download(i)) => self.downloads.cancel_or_remove(i),
+                Some(PaneRow::Download(i)) => {
+                    // a cancel takes effect at once, even while the network hangs
+                    self.downloads.cancel_or_remove(i);
+                    self.pump();
+                }
                 None => {}
             },
             KeyCode::Char('u') => self.update_all(),
@@ -732,19 +739,20 @@ impl App {
         let mut start = None;
         while let Ok(p) = self.rx.try_recv() {
             match p {
-                Progress::Bytes { id, done, total } => {
-                    if let Some(d) = self.downloads.running_mut(&id) {
+                Progress::Bytes { job, done, total } => {
+                    if let Some(d) = self.downloads.running_mut(job) {
                         (d.done, d.total) = (done, total);
                     }
                 }
-                Progress::Status { id, msg } => {
-                    log::info!("{id}: {msg}");
-                    if let Some(d) = self.downloads.running_mut(&id) {
+                Progress::Status { job, msg } => {
+                    log::info!("download {job}: {msg}");
+                    if let Some(d) = self.downloads.running_mut(job) {
                         d.step = msg;
                     }
                 }
-                Progress::Done { id, installed } => {
-                    self.downloads.finish(&id);
+                Progress::Done { job, id, installed } => {
+                    // also one cancelled too late to stop: its files are in place
+                    self.downloads.finish(job);
                     self.status = format!("installed {id} {}", installed.version);
                     if !self.paths.bin_on_path()
                         && let Some(b) = &self.paths.bin
@@ -765,8 +773,11 @@ impl App {
                         }
                     }
                 }
-                Progress::Failed { id, error } => {
-                    self.downloads.fail(&id, error);
+                Progress::Failed { job, id, error } => {
+                    if !self.downloads.fail(job, error) {
+                        // a download already cancelled in the list, giving up late
+                        continue;
+                    }
                     let cancelled = self.downloads.list.iter().any(|d| d.id == id && d.phase == Phase::Cancelled);
                     self.status = if cancelled { format!("{id}: cancelled") } else { format!("{id}: install failed; F2 shows why") };
                     if self.play_after.as_deref() == Some(id.as_str()) && !cancelled {
@@ -834,7 +845,7 @@ impl App {
                 let src = match std::fs::read_to_string(&file) {
                     Ok(s) => s,
                     Err(_) => {
-                        let s = catalog::http().get(&url).call()?.body_mut().with_config().limit(256 << 20).read_to_string()?;
+                        let s = catalog::get_text(&url, 256 << 20)?;
                         std::fs::create_dir_all(file.parent().unwrap())?;
                         crate::state::write_atomic(&file, &s)?;
                         s

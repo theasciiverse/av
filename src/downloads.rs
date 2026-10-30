@@ -31,6 +31,8 @@ pub struct Download {
     pub started: Option<Instant>,
     /// set to stop the running download; the worker checks it per chunk
     pub cancel: Arc<AtomicBool>,
+    /// which worker run this is, so late messages from a cancelled one are told apart
+    pub job: u64,
 }
 
 impl Download {
@@ -48,6 +50,7 @@ impl Download {
 #[derive(Default)]
 pub struct Downloads {
     pub list: Vec<Download>,
+    jobs: u64,
 }
 
 impl Downloads {
@@ -69,6 +72,7 @@ impl Downloads {
             step: String::new(),
             started: None,
             cancel: Arc::new(AtomicBool::new(false)),
+            job: 0,
         });
         true
     }
@@ -81,8 +85,9 @@ impl Downloads {
         self.list.iter().find(|d| d.phase == Phase::Running)
     }
 
-    pub fn running_mut(&mut self, id: &str) -> Option<&mut Download> {
-        self.list.iter_mut().find(|d| d.id == id && d.phase == Phase::Running)
+    /// The running download that worker run `job` belongs to.
+    pub fn running_mut(&mut self, job: u64) -> Option<&mut Download> {
+        self.list.iter_mut().find(|d| d.job == job && d.phase == Phase::Running)
     }
 
     pub fn queued(&self) -> usize {
@@ -99,22 +104,33 @@ impl Downloads {
         if self.running().is_some() {
             return None;
         }
+        self.jobs += 1;
+        let job = self.jobs;
         let d = self.list.iter_mut().find(|d| d.phase == Phase::Queued)?;
         d.phase = Phase::Running;
+        d.job = job;
+        d.cancel = Arc::new(AtomicBool::new(false));
         d.started = Some(Instant::now());
         d.step = "starting".into();
         Some(d)
     }
 
-    /// The worker gave up: a cancel the player asked for, or a real failure.
-    pub fn fail(&mut self, id: &str, error: String) {
-        if let Some(d) = self.running_mut(id) {
-            d.phase = if d.cancel.load(Ordering::Relaxed) { Phase::Cancelled } else { Phase::Failed(error) };
+    /// The worker gave up. False when that download was already cancelled
+    /// in the list (or is gone), so there is nothing to report.
+    pub fn fail(&mut self, job: u64, error: String) -> bool {
+        match self.running_mut(job) {
+            Some(d) => {
+                d.phase = Phase::Failed(error);
+                true
+            }
+            None => false,
         }
     }
 
-    pub fn finish(&mut self, id: &str) {
-        if let Some(d) = self.running_mut(id) {
+    /// The worker finished, also one cancelled too late to stop it: its
+    /// files are in place, so the list says so.
+    pub fn finish(&mut self, job: u64) {
+        if let Some(d) = self.list.iter_mut().find(|d| d.job == job && matches!(d.phase, Phase::Running | Phase::Cancelled)) {
             d.phase = Phase::Done;
             d.done = d.total;
         }
@@ -139,7 +155,12 @@ impl Downloads {
     pub fn cancel_or_remove(&mut self, i: usize) {
         let Some(d) = self.list.get_mut(i) else { return };
         match d.phase {
-            Phase::Running => d.cancel.store(true, Ordering::Relaxed),
+            // cancelled at once, so the next one can start; the worker stops
+            // at its next chunk, or when a stalled connection gives up
+            Phase::Running => {
+                d.cancel.store(true, Ordering::Relaxed);
+                d.phase = Phase::Cancelled;
+            }
             Phase::Queued => d.phase = Phase::Cancelled,
             _ => {
                 self.list.remove(i);
@@ -184,30 +205,40 @@ mod tests {
         assert!(q.queue("a", "A", "1", None));
         assert!(q.queue("b", "B", "2", Some("1".into())));
         assert!(!q.queue("a", "A", "1", None), "already queued");
-        assert_eq!(q.start_next().map(|d| d.id.clone()), Some("a".into()));
+        let ja = q.start_next().map(|d| (d.id.clone(), d.job)).unwrap();
+        assert_eq!(ja.0, "a");
         assert!(q.start_next().is_none(), "one runs at a time");
 
-        q.fail("a", "network down".into());
+        assert!(q.fail(ja.1, "network down".into()));
         assert_eq!(q.list[0].phase, Phase::Failed("network down".into()));
-        assert_eq!(q.start_next().map(|d| d.id.clone()), Some("b".into()));
+        let jb = q.start_next().map(|d| d.job).unwrap();
 
-        // cancelling the running one: the worker's failure reads as a cancel
+        // cancelling the running one takes effect at once, and the next can start
         let b = q.ordered()[0];
         q.cancel_or_remove(b);
-        q.fail("b", "cancelled".into());
+        assert_eq!(q.list.iter().find(|d| d.id == "b").unwrap().phase, Phase::Cancelled);
+        assert!(q.running().is_none());
+        // the worker's late "cancelled" changes nothing
+        assert!(!q.fail(jb, "cancelled".into()));
         assert_eq!(q.list.iter().find(|d| d.id == "b").unwrap().phase, Phase::Cancelled);
 
         // r: failures go back in the queue, cancelled ones stay put
         assert_eq!(q.retry_failed(), 1);
         assert_eq!(q.list.iter().find(|d| d.id == "a").unwrap().phase, Phase::Queued);
-        assert_eq!(q.start_next().map(|d| d.id.clone()), Some("a".into()));
-        q.finish("a");
+        let ja2 = q.start_next().map(|d| d.job).unwrap();
+        assert_ne!(ja2, ja.1, "a new run, a new job number");
+        // a message from a's first, failed run doesn't touch the new one
+        assert!(q.running_mut(ja.1).is_none());
+        q.finish(ja2);
 
         // Enter: a cancelled one is retried too
         let b = q.list.iter().position(|d| d.id == "b").unwrap();
         assert!(q.retry(b));
-        assert_eq!(q.start_next().map(|d| d.id.clone()), Some("b".into()));
-        q.finish("b");
+        let jb2 = q.start_next().map(|d| d.job).unwrap();
+        // the old, cancelled worker of b finishing late is not this run's result
+        q.finish(jb);
+        assert_eq!(q.running().map(|d| d.job), Some(jb2));
+        q.finish(jb2);
         assert_eq!(q.failed(), 0);
         q.clear_finished();
         assert!(q.list.is_empty());

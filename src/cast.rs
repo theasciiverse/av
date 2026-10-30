@@ -33,6 +33,8 @@ pub struct Cast {
 
 impl Cast {
     pub fn parse(src: &str) -> Result<Cast> {
+        const MAX_COLS: u64 = 400;
+        const MAX_ROWS: u64 = 200;
         let mut lines = src.lines().filter(|l| !l.trim().is_empty());
         let head: serde_json::Value =
             serde_json::from_str(lines.next().context("empty cast")?).context("cast header is not JSON")?;
@@ -42,8 +44,15 @@ impl Cast {
             3 => (head["term"]["cols"].as_u64(), head["term"]["rows"].as_u64()),
             v => bail!("asciicast version {v} is not supported"),
         };
-        let (cols, rows) = (cols.unwrap_or(80) as usize, rows.unwrap_or(24) as usize);
-        let idle = head["idle_time_limit"].as_f64().unwrap_or(f64::INFINITY);
+        let (cols, rows) = (cols.unwrap_or(80), rows.unwrap_or(24));
+        // casts are not pinned by a checksum: a size avt can't take, or one
+        // too big to draw, would bring av down rather than one preview
+        if !(1..=MAX_COLS).contains(&cols) || !(1..=MAX_ROWS).contains(&rows) {
+            bail!("a {cols}x{rows} terminal is not one av can show");
+        }
+        let (cols, rows) = (cols as usize, rows as usize);
+        // no limit unless a positive one: a negative one would panic in clamp
+        let idle = head["idle_time_limit"].as_f64().filter(|i| *i > 0.0).unwrap_or(f64::INFINITY);
         let mut events = Vec::new();
         let (mut t, mut prev_abs) = (0.0f64, 0.0f64);
         for line in lines {
@@ -174,6 +183,17 @@ fn xterm256(i: u8) -> (u8, u8, u8) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_cast_av_cannot_show_is_refused_not_a_crash() {
+        for head in [r#"{"version":2,"width":0,"height":0}"#, r#"{"version":3,"term":{"cols":100,"rows":0}}"#, r#"{"version":2,"width":65535,"height":65535}"#] {
+            assert!(Cast::parse(&format!("{head}\n[0.5,\"o\",\"a\"]\n")).is_err(), "{head}");
+        }
+        // a negative idle limit means none, and the player can seek through it
+        let c = Cast::parse("{\"version\":2,\"width\":10,\"height\":2,\"idle_time_limit\":-1}\n[0.5,\"o\",\"a\"]\n[5.5,\"o\",\"b\"]\n").unwrap();
+        assert_eq!(c.duration, 5.5);
+        Player::new(c).seek(3.0);
+    }
 
     #[test]
     fn parses_v2_and_v3_with_idle_limit() {

@@ -270,6 +270,7 @@ impl Ctx {
                 saves: self.paths.saves(&t.id),
                 bin: self.paths.bin.clone(),
                 cancel: None,
+                job: 0,
             },
             tx,
         );

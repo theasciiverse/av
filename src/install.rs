@@ -15,11 +15,13 @@ use sha2::{Digest, Sha256};
 use crate::catalog::{self, Title};
 use crate::state::Installed;
 
+/// A worker's messages, each with its job number, so a late message from a
+/// download the player cancelled never touches a newer one.
 pub enum Progress {
-    Bytes { id: String, done: u64, total: u64 },
-    Status { id: String, msg: String },
-    Done { id: String, installed: Installed },
-    Failed { id: String, error: String },
+    Bytes { job: u64, done: u64, total: u64 },
+    Status { job: u64, msg: String },
+    Done { job: u64, id: String, installed: Installed },
+    Failed { job: u64, id: String, error: String },
 }
 
 pub struct Job {
@@ -30,22 +32,24 @@ pub struct Job {
     /// the title's own files kept from an uninstall, put back by this install
     pub saves: PathBuf,
     pub bin: Option<PathBuf>,
-    /// set from outside to stop the download; checked per chunk
+    /// set from outside to stop the download; checked per chunk, and once
+    /// more before the new install replaces the old
     pub cancel: Option<Arc<AtomicBool>>,
+    pub job: u64,
 }
 
 pub fn spawn(job: Job, tx: Sender<Progress>) {
     std::thread::spawn(move || {
-        let id = job.title.id.clone();
+        let (id, n) = (job.title.id.clone(), job.job);
         let msg = match run(&job, &tx) {
-            Ok(installed) => Progress::Done { id, installed },
+            Ok(installed) => Progress::Done { job: n, id, installed },
             Err(e) if e.to_string() == "cancelled" => {
                 log::info!("install {id} cancelled");
-                Progress::Failed { id, error: "cancelled".into() }
+                Progress::Failed { job: n, id, error: "cancelled".into() }
             }
             Err(e) => {
                 log::error!("install {id} failed: {e:#}");
-                Progress::Failed { id, error: format!("{e:#}") }
+                Progress::Failed { job: n, id, error: format!("{e:#}") }
             }
         };
         let _ = tx.send(msg);
@@ -56,27 +60,38 @@ fn run(job: &Job, tx: &Sender<Progress>) -> Result<Installed> {
     let t = &job.title;
     let (target, plat) = catalog::pick_platform(t).context("no build for this platform")?;
     let url = catalog::resolve(&job.catalog_url, &plat.url);
-    let name = url.rsplit('/').next().unwrap_or("archive").to_string();
     let downloads = job.cache.join("downloads");
     std::fs::create_dir_all(&downloads)?;
-    let archive = downloads.join(&name);
+    // named by title and target, not by the URL, which may end in ?token=
+    // or /download; the format is read from the file itself
+    let archive = downloads.join(format!("{}-{target}", t.id));
+    // gone however this ends: installed, failed or cancelled
+    let _cleanup = Cleanup(vec![archive.clone()]);
     log::info!("install {}: {} from {url}", t.id, target);
 
     // download while hashing
     let status = |msg: &str| {
-        let _ = tx.send(Progress::Status { id: t.id.clone(), msg: msg.into() });
+        let _ = tx.send(Progress::Status { job: job.job, msg: msg.into() });
     };
+    let cancelled = || job.cancel.as_ref().is_some_and(|c| c.load(Ordering::Relaxed));
     status("downloading");
-    let mut resp = catalog::http().get(&url).call().with_context(|| format!("download {url}"))?;
+    // a connection that goes silent fails in the end instead of hanging:
+    // ten minutes, and the time the archive takes at 20 kB/s
+    let patience = std::time::Duration::from_secs(600 + plat.size / 20_000);
+    let mut resp = catalog::http()
+        .get(&url)
+        .config()
+        .timeout_recv_body(Some(patience))
+        .build()
+        .call()
+        .with_context(|| format!("download {url}"))?;
     let total = resp.body().content_length().unwrap_or(plat.size);
     let mut reader = resp.body_mut().as_reader();
     let mut file = std::fs::File::create(&archive)?;
     let mut hasher = Sha256::new();
     let (mut buf, mut done) = (vec![0u8; 64 * 1024], 0u64);
     loop {
-        if job.cancel.as_ref().is_some_and(|c| c.load(Ordering::Relaxed)) {
-            drop(file);
-            let _ = std::fs::remove_file(&archive);
+        if cancelled() {
             bail!("cancelled");
         }
         let n = reader.read(&mut buf)?;
@@ -86,12 +101,11 @@ fn run(job: &Job, tx: &Sender<Progress>) -> Result<Installed> {
         hasher.update(&buf[..n]);
         file.write_all(&buf[..n])?;
         done += n as u64;
-        let _ = tx.send(Progress::Bytes { id: t.id.clone(), done, total });
+        let _ = tx.send(Progress::Bytes { job: job.job, done, total });
     }
     file.sync_all()?;
     let got = hex(&hasher.finalize());
     if !got.eq_ignore_ascii_case(&plat.sha256) {
-        let _ = std::fs::remove_file(&archive);
         bail!("checksum mismatch: the catalog says {}, the download is {got}. Not installed.", plat.sha256);
     }
     status("checksum ok, extracting");
@@ -105,10 +119,14 @@ fn run(job: &Job, tx: &Sender<Progress>) -> Result<Installed> {
     // only ever the archive's files: the title's own are never moved here
     let _ = remove_all(&staging);
     std::fs::create_dir_all(&staging)?;
-    extract(&archive, &name, &staging)?;
+    let _staging = Cleanup(vec![staging.clone()]);
+    extract(&archive, &staging)?;
     let exe = find_exec(&staging, &t.exec_name()).with_context(|| format!("{} not found in the archive", t.exec_name()))?;
     set_executable(&exe)?;
     write_shipped(&staging)?;
+    if cancelled() {
+        bail!("cancelled");
+    }
     swap_in(&staging, &job.dest)?;
     // files the title wrote before an uninstall come back with it
     if job.saves.is_dir() {
@@ -120,7 +138,6 @@ fn run(job: &Job, tx: &Sender<Progress>) -> Result<Installed> {
     if let Some(bin) = &job.bin {
         link(bin, &t.id, &exe)?;
     }
-    let _ = std::fs::remove_file(&archive);
     Ok(Installed {
         id: t.id.clone(),
         version: t.version.clone(),
@@ -131,16 +148,31 @@ fn run(job: &Job, tx: &Sender<Progress>) -> Result<Installed> {
     })
 }
 
-/// Unpack by the archive's name: `.tar.gz` on Linux and macOS, `.zip` on
-/// Windows. Both refuse entries that would land outside `dest`.
-fn extract(archive: &Path, name: &str, dest: &Path) -> Result<()> {
+/// Files and folders removed when this goes out of scope, whatever happened.
+struct Cleanup(Vec<PathBuf>);
+
+impl Drop for Cleanup {
+    fn drop(&mut self) {
+        for p in &self.0 {
+            if p.is_dir() {
+                let _ = remove_all(p);
+            } else {
+                let _ = std::fs::remove_file(p);
+            }
+        }
+    }
+}
+
+/// Unpack a `.tar.gz` (Linux and macOS) or `.zip` (Windows), told apart by
+/// their first bytes. Both refuse entries that would land outside `dest`.
+fn extract(archive: &Path, dest: &Path) -> Result<()> {
+    let mut magic = [0u8; 4];
+    let n = std::fs::File::open(archive)?.read(&mut magic)?;
     let file = std::fs::File::open(archive)?;
-    if name.ends_with(".tar.gz") || name.ends_with(".tgz") {
-        tar::Archive::new(flate2::read::GzDecoder::new(file)).unpack(dest).context("extract tar.gz")?;
-    } else if name.ends_with(".zip") {
-        zip::ZipArchive::new(file).and_then(|mut z| z.extract(dest)).context("extract zip")?;
-    } else {
-        bail!("unsupported archive {name}: av unpacks .tar.gz and .zip");
+    match &magic[..n] {
+        [0x1f, 0x8b, ..] => tar::Archive::new(flate2::read::GzDecoder::new(file)).unpack(dest).context("extract tar.gz")?,
+        [b'P', b'K', 3, 4] => zip::ZipArchive::new(file).and_then(|mut z| z.extract(dest)).context("extract zip")?,
+        _ => bail!("the download is neither a .tar.gz nor a .zip, the two archives av unpacks"),
     }
     Ok(())
 }
@@ -441,6 +473,7 @@ mod tests {
                 saves: self.saves(),
                 bin: Some(self.bin()),
                 cancel: None,
+                job: 0,
             }
         }
     }
@@ -476,7 +509,7 @@ mod tests {
             assert_eq!(fs::read_link(home.bin().join("game")).unwrap(), exe);
         }
         assert!(rx.try_iter().any(|p| matches!(p, super::Progress::Status { msg, .. } if msg.starts_with("checksum ok"))));
-        assert!(!home.root.join("cache/downloads/game-1.tar.gz").exists(), "the archive is removed after installing");
+        assert_eq!(fs::read_dir(home.root.join("cache/downloads")).unwrap().count(), 0, "the archive is removed after installing");
 
         // the title writes a save next to itself; an update keeps it
         fs::write(home.dest().join("game/save.dat"), "my save").unwrap();
@@ -490,6 +523,33 @@ mod tests {
         assert!(!home.dest().exists());
         assert!(!home.saves().exists(), "remove takes the title's own files too");
         assert!(home.bin().join("game").symlink_metadata().is_err(), "the link is gone");
+    }
+
+    #[test]
+    fn an_archive_url_with_a_query_or_no_extension_installs() {
+        let v1 = tar_gz("binary 1", "data 1");
+        let sha1 = sha(&v1);
+        let base = serve(BTreeMap::from([("/files/game-1.0/download".to_string(), v1.clone()), ("/r/game.tar.gz?token=abc".to_string(), v1)]));
+        let catalog_url = format!("{base}/catalog.json");
+        let (tx, _rx) = channel();
+        for url in ["/files/game-1.0/download", "/r/game.tar.gz?token=abc"] {
+            let home = Home::new("url-shape");
+            run(&home.job(title("1.0", url, &sha1), &catalog_url), &tx).unwrap_or_else(|e| panic!("{url}: {e:#}"));
+            assert_eq!(read(&home.exe()), "binary 1");
+        }
+    }
+
+    #[test]
+    fn a_failed_install_leaves_no_download_or_staging_behind() {
+        // checksum ok, but the binary the catalog names isn't in the archive
+        let v1 = tar_gz_with(&[("other/thing", "x")]);
+        let sha1 = sha(&v1);
+        let base = serve(BTreeMap::from([("/r/1.tar.gz".to_string(), v1)]));
+        let home = Home::new("leftovers");
+        let (tx, _rx) = channel();
+        assert!(run(&home.job(title("1.0", "/r/1.tar.gz", &sha1), &format!("{base}/catalog.json")), &tx).is_err());
+        assert_eq!(fs::read_dir(home.root.join("cache/downloads")).unwrap().count(), 0);
+        assert!(!sibling(&home.dest(), "new").exists());
     }
 
     #[test]
@@ -650,7 +710,7 @@ mod tests {
         let err = run(&home.job(title("1.0", "/r/game.tar.gz", &wrong), &format!("{base}/catalog.json")), &tx).unwrap_err();
         assert!(err.to_string().starts_with("checksum mismatch"), "{err:#}");
         assert!(!home.dest().exists(), "nothing is extracted");
-        assert!(!home.root.join("cache/downloads/game.tar.gz").exists(), "the bad download is deleted");
+        assert_eq!(fs::read_dir(home.root.join("cache/downloads")).unwrap().count(), 0, "the bad download is deleted");
         assert!(home.bin().join("game").symlink_metadata().is_err());
     }
 
@@ -684,10 +744,12 @@ mod tests {
         z.finish().unwrap();
 
         let dest = root.join("out");
-        extract(&archive, "game-x86_64-pc-windows-msvc.zip", &dest).unwrap();
+        extract(&archive, &dest).unwrap();
         assert_eq!(find_exec(&dest, "game.exe"), Some(dest.join("game/game.exe")));
         assert_eq!(fs::read_to_string(dest.join("game/data/levels.txt")).unwrap(), "level 1");
-        assert!(extract(&archive, "game.7z", &dest).is_err());
+        let not_an_archive = root.join("game.7z");
+        fs::write(&not_an_archive, b"7z\xbc\xaf").unwrap();
+        assert!(extract(&not_an_archive, &dest).is_err());
         let _ = fs::remove_dir_all(&root);
     }
 
