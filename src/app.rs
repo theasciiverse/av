@@ -370,6 +370,7 @@ impl App {
                 let gone = catalog::gone(&l.catalog.titles, &self.state.installed);
                 let mut titles: Vec<Title> = l.catalog.titles.into_values().chain(gone).collect();
                 catalog::sort(&mut titles);
+                catalog::index(&mut titles, &l.catalog.collections);
                 self.titles = titles;
                 self.collections = l.catalog.collections;
                 self.offline = l.offline;
@@ -406,7 +407,7 @@ impl App {
         let mut v: Vec<&Title> = self.titles
             .iter()
             .filter(|t| self.show.lets_through(t, &self.state))
-            .filter(|t| t.matches(&f, &self.collections))
+            .filter(|t| t.matches(&f))
             .collect();
         if !f.is_empty() {
             // within each kind's group, titles whose name matches come first;
@@ -429,8 +430,9 @@ impl App {
             .unwrap_or(0)
     }
 
-    pub fn current(&self) -> Option<Title> {
-        self.visible().get(self.selected).map(|t| (*t).clone())
+    /// The highlighted title.
+    pub fn current(&self) -> Option<&Title> {
+        self.visible().get(self.selected).copied()
     }
 
     pub fn status_of(&self, t: &Title) -> Status {
@@ -497,7 +499,7 @@ impl App {
     /// A header shortcut: show only that part of the player's titles, or,
     /// when the list already shows exactly that, all of them again.
     fn only(&mut self, m: Mine) {
-        let keep = self.current().map(|t| t.id);
+        let keep = self.current().map(|t| t.id.clone());
         let want = (m == Mine::Installed, m == Mine::Updates, m == Mine::Wishlist);
         let now = (self.show.installed, self.show.updates, self.show.wishlist);
         (self.show.installed, self.show.updates, self.show.wishlist) = if now == want { (false, false, false) } else { want };
@@ -669,7 +671,7 @@ impl App {
     /// is still in the list.
     fn toggle_show(&mut self, i: usize) {
         let Some(r) = self.show_rows().get(i).cloned() else { return };
-        let keep = self.current().map(|t| t.id);
+        let keep = self.current().map(|t| t.id.clone());
         match &r {
             // all on, or when they already are, all off
             ShowRow::All if self.show.hidden.is_empty() => {
@@ -775,7 +777,7 @@ impl App {
                     if current {
                         // the obvious next step after installing is playing
                         if let Some(t) = self.current() {
-                            self.action = self.actions(&t).iter().position(|(a, ..)| *a == Action::Play).unwrap_or(0);
+                            self.action = self.actions(t).iter().position(|(a, ..)| *a == Action::Play).unwrap_or(0);
                         }
                     }
                 }
@@ -832,20 +834,22 @@ impl App {
 
     /// Load the selected title's cast in the background (cached on disk).
     fn ensure_cast(&mut self) {
-        let Some(t) = self.current() else { return };
-        if self.player.as_ref().is_some_and(|(id, _)| *id == t.id) {
+        // every frame: only the id and the cast's address, not the whole title
+        let Some((id, cast_url)) = self.current().map(|t| (t.id.clone(), t.cast_url.clone())) else { return };
+        if self.player.as_ref().is_some_and(|(p, _)| *p == id) {
             return;
         }
         self.player = None;
-        let Some(url) = &t.cast_url else { return };
-        if self.cast_loading.contains(&t.id) || self.cast_failed.contains_key(&t.id) {
+        let Some(url) = cast_url else { return };
+        if self.cast_loading.contains(&id) || self.cast_failed.contains_key(&id) {
             return;
         }
-        let url = catalog::resolve(&self.catalog_url, url);
+        let url = catalog::resolve(&self.catalog_url, &url);
         // keyed by URL too: a re-recorded cast gets a new URL from the catalog
         // build, and must not be shadowed by the old file in the cache
-        let file = self.paths.cache.join("casts").join(format!("{}-{:016x}.cast", t.id, catalog::fnv1a(&url)));
-        let (tx, id) = (self.cast_tx.clone(), t.id.clone());
+        let file = self.paths.cache.join("casts").join(format!("{id}-{:016x}.cast", catalog::fnv1a(&url)));
+        self.cast_loading.insert(id.clone());
+        let tx = self.cast_tx.clone();
         std::thread::spawn(move || {
             let res = (|| -> anyhow::Result<Cast> {
                 let src = match std::fs::read_to_string(&file) {
@@ -861,7 +865,6 @@ impl App {
             })();
             let _ = tx.send(CastMsg::Loaded(id, res.map_err(|e| format!("{e:#}"))));
         });
-        self.cast_loading.insert(t.id.clone());
     }
 
     /// None when there is nothing to show, else a placeholder message.
@@ -950,7 +953,7 @@ impl App {
             KeyCode::Char('/') => {
                 self.focus = Focus::List;
                 if !self.filter.is_empty() {
-                    let keep = self.current().map(|t| t.id);
+                    let keep = self.current().map(|t| t.id.clone());
                     self.filter.clear();
                     self.selected = keep.and_then(|id| self.visible().iter().position(|t| t.id == id)).unwrap_or(0);
                 }
@@ -1045,7 +1048,7 @@ impl App {
                 self.toggle_show(i);
             }
             (MouseEventKind::Down(MouseButton::Left), Some(Hit::Button(i))) => {
-                let Some(t) = self.current() else { return };
+                let Some(t) = self.current().cloned() else { return };
                 self.focus = Focus::Actions;
                 self.action = i;
                 if let Some((a, _, true)) = self.actions(&t).get(i).cloned() {
@@ -1054,8 +1057,8 @@ impl App {
             }
             (MouseEventKind::Down(MouseButton::Left), Some(Hit::Detail)) => {
                 self.focus = Focus::Page;
-                if let (Some(t), Some(at)) = (self.current(), self.in_page(pos)) {
-                    self.selection = Some(Selection { id: t.id, from: at, to: at, dragging: true });
+                if let (Some(id), Some(at)) = (self.current().map(|t| t.id.clone()), self.in_page(pos)) {
+                    self.selection = Some(Selection { id, from: at, to: at, dragging: true });
                 }
             }
             // typing goes to the search box whenever the list has focus
@@ -1129,7 +1132,7 @@ impl App {
     }
 
     fn actions_key(&mut self, k: KeyEvent) {
-        let Some(t) = self.current() else { return };
+        let Some(t) = self.current().cloned() else { return };
         let acts = self.actions(&t);
         match k.code {
             KeyCode::Left => self.action = self.action.saturating_sub(1),

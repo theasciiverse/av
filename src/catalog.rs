@@ -68,6 +68,22 @@ pub fn rank(t: &Title) -> u8 {
     if t.gone { u8::MAX } else { kind_rank(&t.kind) }
 }
 
+/// Put together each title's search text once, at load, so a search
+/// doesn't lowercase the whole catalog on every frame. Fields are kept
+/// apart by a newline, so no match runs from one into the next.
+pub fn index(titles: &mut [Title], cols: &Collections) {
+    for t in titles {
+        let mut parts = vec![t.title.as_str(), t.id.as_str(), t.description.as_str()];
+        parts.extend(t.topics.iter().map(String::as_str));
+        parts.extend(t.genre.as_deref());
+        parts.extend(t.developer.as_ref().map(|d| d.name.as_str()));
+        parts.extend(t.collection.as_deref());
+        let name = t.collection_name(cols).map(str::to_string);
+        parts.extend(name.as_deref());
+        t.haystack = parts.join("\n").to_lowercase();
+    }
+}
+
 /// The list's order: by group, alphabetical within each.
 pub fn sort(titles: &mut [Title]) {
     titles.sort_by(|a, b| (rank(a), a.title.to_lowercase()).cmp(&(rank(b), b.title.to_lowercase())));
@@ -154,6 +170,9 @@ pub struct Title {
     /// installed, but no longer in the catalog (see `gone`); not a catalog field
     #[serde(skip)]
     pub gone: bool,
+    /// everything search looks at, lowercased once (see `index`)
+    #[serde(skip)]
+    pub haystack: String,
 }
 
 /// `[exec]`: the binary to run, named by kind (`game = "greed"`), and the
@@ -228,16 +247,10 @@ impl Title {
     /// Whether a search (already lowercased) finds this title: name, topics,
     /// genre, developer, collection or description. An empty search finds
     /// everything.
-    pub fn matches(&self, f: &str, cols: &Collections) -> bool {
-        f.is_empty()
-            || self.collection_name(cols).is_some_and(|c| c.to_lowercase().contains(f))
-            || self.collection.as_deref().is_some_and(|c| c.contains(f))
-            || self.title.to_lowercase().contains(f)
-            || self.id.contains(f)
-            || self.topics.iter().any(|x| x.to_lowercase().contains(f))
-            || self.genre.as_deref().is_some_and(|g| g.to_lowercase().contains(f))
-            || self.developer.as_ref().is_some_and(|d| d.name.to_lowercase().contains(f))
-            || self.description.to_lowercase().contains(f)
+    /// Whether a lowercased search matches: name, id, topics, genre,
+    /// developer, description or collection, as put together by `index`.
+    pub fn matches(&self, f: &str) -> bool {
+        f.is_empty() || self.haystack.contains(f)
     }
 
     pub fn is_mud(&self) -> bool {

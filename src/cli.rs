@@ -177,6 +177,7 @@ impl Ctx {
         let gone = catalog::gone(&l.catalog.titles, &self.state.installed);
         let mut titles: Vec<Title> = l.catalog.titles.into_values().chain(gone).collect();
         catalog::sort(&mut titles);
+        catalog::index(&mut titles, &l.catalog.collections);
         self.titles = titles;
         self.collections = l.catalog.collections;
         self.offline = l.offline;
@@ -192,7 +193,7 @@ impl Ctx {
         if let Some(t) = self.titles.iter().find(|t| t.id == low || t.title.to_lowercase() == low) {
             return Ok(t.clone());
         }
-        let near: Vec<String> = self.titles.iter().filter(|t| t.matches(&low, &self.collections)).take(5).map(|t| t.id.clone()).collect();
+        let near: Vec<String> = self.titles.iter().filter(|t| t.matches(&low)).take(5).map(|t| t.id.clone()).collect();
         if near.is_empty() {
             bail!("no title {name:?} in the catalog; try `av search {name}`");
         }
@@ -432,7 +433,7 @@ impl Ctx {
 
     fn search(&self, words: &str) -> Result<()> {
         let f = words.to_lowercase();
-        let mut v: Vec<&Title> = self.titles.iter().filter(|t| t.matches(&f, &self.collections)).collect();
+        let mut v: Vec<&Title> = self.titles.iter().filter(|t| t.matches(&f)).collect();
         // titles whose name matches first, the rest after, catalog order kept inside each
         v.sort_by_key(|t| !t.title.to_lowercase().contains(&f));
         if v.is_empty() {

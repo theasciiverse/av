@@ -35,7 +35,8 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     draw_list(f, app, list);
     app.hits.push((detail, Hit::Detail));
     app.page_view = None;
-    match app.current() {
+    // one copy a frame: drawing it also changes app (hits, scroll)
+    match app.current().cloned() {
         Some(t) => draw_detail(f, app, &t, detail),
         None => {
             let msg = if app.titles.is_empty() && app.is_loading() {
