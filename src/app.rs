@@ -716,10 +716,14 @@ impl App {
                     self.downloads.fail(&id, error);
                     let cancelled = self.downloads.list.iter().any(|d| d.id == id && d.phase == Phase::Cancelled);
                     self.status = if cancelled { format!("{id}: cancelled") } else { format!("{id}: install failed; F2 shows why") };
-                    if self.play_after.as_deref() == Some(id.as_str()) {
+                    if self.play_after.as_deref() == Some(id.as_str()) && !cancelled {
+                        // they wanted to play: the version they have, and why
                         self.play_after = None;
                         let have = self.state.installed.get(&id).map(|i| i.version.clone()).unwrap_or_default();
-                        self.status = format!("{id}: the update failed (F2 shows why); Play starts {have}");
+                        self.status = format!("{id}: the update failed (F2 shows why), so playing {have}");
+                        self.launch = self.titles.iter().find(|t| t.id == id).cloned();
+                    } else if cancelled && self.play_after.as_deref() == Some(id.as_str()) {
+                        self.play_after = None;
                     }
                 }
             }
