@@ -1,6 +1,6 @@
 # Roadmap
 
-av is at 0.9.8 (2026-10-30): everything planned works on Linux, from the
+av is at 0.9.9 (2026-10-30): everything planned works on Linux, from the
 intro and the welcome screen to playing a title and reading its news. It
 has never run on macOS or Windows. 1.0.0 is when everything below is in
 and av has had its first public release.
@@ -82,6 +82,17 @@ and av has had its first public release.
 - [x] A log is always kept, and help, the README and the man page say
   where to report a problem
 - [x] How to remove av, in the README and the man page
+
+## 0.9.9: built
+
+- [x] A full code review, and its findings fixed: saves are kept through
+  uninstall and failed updates, two avs no longer overwrite each other's
+  library, a bad preview or catalog entry can't crash av or break the
+  catalog, and a stalled download can be cancelled at once
+- [x] Titles start from the shell as they do from av, and av leaves other
+  programs' files in ~/.local/bin alone
+- [x] av comes back after a title even when the terminal is slow to answer
+- [x] Help and long notes scroll on small terminals
 
 ## 1.0.0
 
