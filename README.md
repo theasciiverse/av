@@ -19,6 +19,9 @@ Windows (PowerShell):
 irm https://asciiverse.sh/install.ps1 | iex
 ```
 
+For a scripted install, `AV_INSTALL=user` (just `av`, for you) or
+`AV_INSTALL=deb` skips the questions: `curl -fsSL https://asciiverse.sh/install.sh | AV_INSTALL=user sh`.
+
 Both download the build for your system from this repository's releases,
 check it against `SHA256SUMS` and put `av` on your PATH. To do it by hand,
 take the archive for your system from the
