@@ -1,6 +1,6 @@
 # Roadmap
 
-av is at 0.9.3 (2026-10-30): everything planned works on Linux, from the
+av is at 0.9.4 (2026-10-30): everything planned works on Linux, from the
 intro and the welcome screen to playing a title and reading its news. It
 has never run on macOS or Windows. 1.0.0 is when everything below is in
 and av has had its first public release.
@@ -50,6 +50,11 @@ and av has had its first public release.
 ## 0.9.3: built
 
 - [x] Dragging over a title's page copies its text, wrapped lines joined
+
+## 0.9.4: built
+
+- [x] The .deb recommends what av runs and most titles load: fontconfig,
+  a font with Braille, xdg-utils, telnet, ALSA and udev
 
 ## 1.0.0
 
