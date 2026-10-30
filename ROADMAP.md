@@ -1,6 +1,6 @@
 # Roadmap
 
-av is at 0.9.6 (2026-10-30): everything planned works on Linux, from the
+av is at 0.9.7 (2026-10-30): everything planned works on Linux, from the
 intro and the welcome screen to playing a title and reading its news. It
 has never run on macOS or Windows. 1.0.0 is when everything below is in
 and av has had its first public release.
@@ -65,8 +65,12 @@ and av has had its first public release.
 ## 0.9.6: built
 
 - [x] Play with an update waiting: offline it starts the installed version
-  at once; online "Update first" updates and then starts the game, and says
-  so when the update fails
+  at once; "Update first" updates and then starts the game
+
+## 0.9.7: built
+
+- [x] "Update first" starts the version you have when the update can't be
+  had, as when the network is down but the catalog was fresh
 
 ## 1.0.0
 
