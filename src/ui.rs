@@ -627,11 +627,13 @@ fn facts(app: &App, t: &Title) -> Vec<Line<'static>> {
     if t.requires.gamepad {
         lines.push(fact("Gamepad", "supported".to_string()));
     }
-    if !t.requires.glyphs.is_empty() {
-        lines.push(Line::from(Span::styled(
-            format!("Font needs {} glyphs", t.requires.glyphs.join(", ")),
-            Style::default().fg(theme::AMBER_SOFT),
-        )));
+    // only when this machine lacks them, with where to read what to do
+    if t.requires.glyphs.iter().any(|g| crate::glyphs::missing(g)) {
+        lines.push(Line::from(vec![
+            Span::styled(format!("{:<11}", "Needs"), Style::default().fg(theme::FAINT)),
+            Span::styled("a font with Braille: ", Style::default().fg(theme::AMBER_SOFT)),
+            Span::styled(crate::glyphs::HELP_URL, Style::default().fg(theme::AMBER_SOFT).add_modifier(Modifier::UNDERLINED)),
+        ]));
     }
     if !t.system_deps.is_empty() {
         lines.push(Line::from(Span::styled(

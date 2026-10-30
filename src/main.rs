@@ -6,6 +6,7 @@ mod catalog;
 mod cli;
 mod complete;
 mod downloads;
+mod glyphs;
 mod install;
 mod launch;
 mod md;
