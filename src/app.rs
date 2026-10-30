@@ -169,6 +169,17 @@ pub enum Hit {
     Detail,
 }
 
+/// Text being selected with the mouse in the page column, in the column's
+/// own cells (row 0 is its top, not the screen's), so it stays on the same
+/// words while the page scrolls.
+pub struct Selection {
+    pub id: String,
+    pub from: (u16, u16),
+    pub to: (u16, u16),
+    /// the button is still down
+    pub dragging: bool,
+}
+
 pub enum CastMsg {
     Loaded(String, Result<Cast, String>),
 }
@@ -210,6 +221,15 @@ pub struct App {
     rx: Receiver<Progress>,
     cast_tx: Sender<CastMsg>,
     cast_rx: Receiver<CastMsg>,
+    pub selection: Option<Selection>,
+    /// the page column on screen and how far it is scrolled, from the last
+    /// frame, to place the mouse in it
+    pub page_view: Option<(Rect, u16)>,
+    /// selected text the next frame takes to the clipboard
+    pub to_copy: Option<String>,
+    /// set when a drag ends; drawing reads the text out of the column
+    pub copy_wanted: bool,
+    clipboard: crate::clipboard::Clipboard,
     /// while offline ticks Installed for the run: the player's own setting,
     /// which is what show.json keeps; None once they change it themselves
     installed_saved: Option<bool>,
@@ -268,6 +288,11 @@ impl App {
             rx,
             cast_tx,
             cast_rx,
+            selection: None,
+            page_view: None,
+            to_copy: None,
+            copy_wanted: false,
+            clipboard: Default::default(),
             installed_saved: None,
             loading: None,
             last_tick: Instant::now(),
@@ -627,6 +652,7 @@ impl App {
     fn select(&mut self, i: usize) {
         if i != self.selected {
             self.selected = i;
+            self.selection = None;
             self.page_scroll = 0;
             self.action = 0;
         }
@@ -636,6 +662,9 @@ impl App {
     pub fn tick(&mut self) {
         if self.intro.is_some_and(|t| t.elapsed().as_secs_f64() >= INTRO_SECS) {
             self.end_intro();
+        }
+        if let Some(text) = self.to_copy.take() {
+            self.status = self.clipboard.copy(&text);
         }
         if let Some(res) = self.loading.as_ref().and_then(|rx| rx.try_recv().ok()) {
             self.loading = None;
@@ -873,7 +902,23 @@ impl App {
             }
             return;
         }
+        let dragging = self.selection.as_ref().is_some_and(|s| s.dragging);
+        if m.kind == MouseEventKind::Down(MouseButton::Left) {
+            self.selection = None;
+        }
         match (m.kind, hit) {
+            // selecting text in the page: wherever the mouse goes while held
+            (MouseEventKind::Drag(MouseButton::Left), _) if dragging => self.drag_to(pos),
+            (MouseEventKind::Up(MouseButton::Left), _) if dragging => {
+                if let Some(s) = self.selection.as_mut() {
+                    s.dragging = false;
+                }
+                match &self.selection {
+                    Some(s) if s.from == s.to => self.selection = None,
+                    Some(_) => self.copy_wanted = true,
+                    None => {}
+                }
+            }
             (MouseEventKind::Down(MouseButton::Left), Some(Hit::Row(i))) => {
                 self.select(i);
                 self.focus = Focus::List;
@@ -898,7 +943,12 @@ impl App {
                     self.run(a, &t);
                 }
             }
-            (MouseEventKind::Down(MouseButton::Left), Some(Hit::Detail)) => self.focus = Focus::Page,
+            (MouseEventKind::Down(MouseButton::Left), Some(Hit::Detail)) => {
+                self.focus = Focus::Page;
+                if let (Some(t), Some(at)) = (self.current(), self.in_page(pos)) {
+                    self.selection = Some(Selection { id: t.id, from: at, to: at, dragging: true });
+                }
+            }
             // typing goes to the search box whenever the list has focus
             (MouseEventKind::Down(MouseButton::Left), Some(Hit::Search | Hit::List)) => self.focus = Focus::List,
             (MouseEventKind::ScrollDown, Some(Hit::Row(_) | Hit::List)) => {
@@ -911,6 +961,30 @@ impl App {
                 self.page_scroll = self.page_scroll.saturating_sub(3)
             }
             _ => {}
+        }
+    }
+
+    /// A screen cell as a cell of the page column, held inside the column.
+    fn in_page(&self, pos: Position) -> Option<(u16, u16)> {
+        let (r, top) = self.page_view?;
+        let x = pos.x.clamp(r.x, r.right().saturating_sub(1)) - r.x;
+        let y = pos.y.clamp(r.y, r.bottom().saturating_sub(1)) - r.y;
+        Some((x, y + top))
+    }
+
+    /// The selection follows the mouse, and dragging past the top or bottom
+    /// of the page scrolls it.
+    fn drag_to(&mut self, pos: Position) {
+        if let Some((r, _)) = self.page_view {
+            if pos.y < r.y {
+                self.page_scroll = self.page_scroll.saturating_sub(1);
+            } else if pos.y >= r.bottom() {
+                self.page_scroll += 1;
+            }
+        }
+        let at = self.in_page(pos);
+        if let (Some(s), Some(at)) = (self.selection.as_mut(), at) {
+            s.to = at;
         }
     }
 

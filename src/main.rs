@@ -3,6 +3,7 @@
 mod app;
 mod cast;
 mod catalog;
+mod clipboard;
 mod cli;
 mod complete;
 mod downloads;

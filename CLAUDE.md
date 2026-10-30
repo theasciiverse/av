@@ -104,7 +104,12 @@ Rust + Ratatui, one binary crate, its own private git repo
 Added in the first cut (2026-10-10): `ureq` 3.4 (HTTP, MIT OR Apache-2.0),
 `sha2` 0.11 (checksums), `tar` 0.4 + `flate2` 1.1 (`.tar.gz`), `serde` /
 `serde_json`, `anyhow`. Added 2026-10-27: `zip` 9.1 (MIT), deflate only, on
-the same `flate2`/`zlib-rs` as `.tar.gz`. Ratatui
+the same `flate2`/`zlib-rs` as `.tar.gz`. Added 2026-10-30: `arboard` 3.7
+(MIT OR Apache-2.0, default features off) for copying page text: dragging
+over a title's page selects it, and on release `av` sends OSC 52 and sets
+the system clipboard through `wl-copy`, `xclip` or `xsel` when present
+(they keep the text after `av` quits), else through `arboard`. VTE
+terminals ignore OSC 52 (checked on GNOME Terminal 2026-10-30). Ratatui
 0.30's own crossterm re-export is used rather than a direct dependency.
 
 ## Catalog and updates

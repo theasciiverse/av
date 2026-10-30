@@ -34,6 +34,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     draw_show(f, app, card);
     draw_list(f, app, list);
     app.hits.push((detail, Hit::Detail));
+    app.page_view = None;
     match app.current() {
         Some(t) => draw_detail(f, app, &t, detail),
         None => {
@@ -493,11 +494,28 @@ fn draw_detail(f: &mut Frame, app: &mut App, t: &Title, area: Rect) {
     let max_scroll = end.saturating_sub(area.height);
     app.page_scroll = app.page_scroll.min(max_scroll);
     let top = app.page_scroll;
+    app.page_view = Some((area, top));
+
+    // text selected with the mouse, in reading order
+    let selected = app.selection.as_ref().filter(|s| s.id == t.id).map(|s| {
+        let (a, b) = if (s.from.1, s.from.0) <= (s.to.1, s.to.0) { (s.from, s.to) } else { (s.to, s.from) };
+        move |x: u16, y: u16| (a.1, a.0) <= (y, x) && (y, x) <= (b.1, b.0)
+    });
+    if app.copy_wanted {
+        app.copy_wanted = false;
+        if let Some(s) = app.selection.as_ref().filter(|s| s.id == t.id) {
+            app.to_copy = Some(selected_text(&buf, s.from, s.to, page_w));
+        }
+    }
 
     let out = f.buffer_mut();
     for y in 0..area.height.min(virt.height - top) {
         for x in 0..area.width {
-            out[(area.x + x, area.y + y)] = buf[(x, top + y)].clone();
+            let mut cell = buf[(x, top + y)].clone();
+            if selected.as_ref().is_some_and(|on| on(x, top + y)) {
+                cell.modifier.insert(Modifier::REVERSED);
+            }
+            out[(area.x + x, area.y + y)] = cell;
         }
     }
     for (i, (x, y, w)) in button_at.into_iter().enumerate() {
@@ -515,6 +533,33 @@ fn draw_detail(f: &mut Frame, app: &mut App, t: &Title, area: Rect) {
         let r = Rect { x: area.x + area.width.saturating_sub(10), y: area.y, width: 10, height: 1 };
         Paragraph::new(hint(" ↑ more ")).alignment(Alignment::Right).render(r, out);
     }
+}
+
+/// The text between two cells of the page column, as it reads: rows that a
+/// paragraph wrapped are joined with a space again, so copied sentences
+/// come out whole; a blank row stays a paragraph break.
+fn selected_text(buf: &Buffer, from: (u16, u16), to: (u16, u16), wrap_w: u16) -> String {
+    let (a, b) = if (from.1, from.0) <= (to.1, to.0) { (from, to) } else { (to, from) };
+    let w = buf.area.width;
+    let cells = |y: u16, x0: u16, x1: u16| (x0..x1.min(w)).map(|x| buf[(x, y)].symbol()).collect::<String>().trim_end().to_string();
+    let mut out = String::new();
+    for y in a.1..=b.1 {
+        let part = cells(y, if y == a.1 { a.0 } else { 0 }, if y == b.1 { b.0 + 1 } else { w });
+        if y > a.1 {
+            // whole rows decide: the paragraph moved this row's first word
+            // down because it didn't fit on the row above
+            let (prev, row) = (cells(y - 1, 0, w), cells(y, 0, w));
+            let first_word = row.trim_start().split(' ').next().unwrap_or("");
+            let wrapped = !prev.is_empty()
+                && !first_word.is_empty()
+                && prev.chars().count() + 1 + first_word.chars().count() > (wrap_w as usize).saturating_sub(2);
+            out.push_str(if wrapped { " " } else { "\n" });
+            out.push_str(if wrapped { part.trim_start() } else { &part });
+        } else {
+            out.push_str(&part);
+        }
+    }
+    out
 }
 
 fn draw_preview(buf: &mut Buffer, app: &App, t: &Title, area: Rect) {
@@ -878,6 +923,10 @@ fn help_text() -> Text<'static> {
         key("W", "in this help: the welcome page again"),
         key("Esc", "back one step; at the top, quit"),
         Line::default(),
+        head("Mouse"),
+        text("  Drag over a title's page to copy the text. Shift and drag selects"),
+        text("  anything on the screen, the way your terminal does it."),
+        Line::default(),
         head("Menu row"),
         text("  ● installed, ▲ updates and ♥ wishlisted: click one to show only"),
         text("  those, click it again to show everything. ♥ support: how to help"),
@@ -1142,6 +1191,20 @@ fn modal_box(f: &mut Frame, title: &str, r: Rect) -> Rect {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn selected_text_joins_wrapped_rows() {
+        // a 20-wide paragraph, wrapped as ratatui wraps it, then a new one
+        let lines = ["Points joined by", "lines along every", "row.", "", "Next paragraph."];
+        let mut buf = Buffer::empty(Rect::new(0, 0, 20, lines.len() as u16));
+        for (y, l) in lines.iter().enumerate() {
+            buf.set_string(0, y as u16, l, Style::default());
+        }
+        let all = selected_text(&buf, (0, 0), (19, 4), 20);
+        assert_eq!(all, "Points joined by lines along every row.\n\nNext paragraph.");
+        // from the middle of a row to the middle of a later one, dragged backwards
+        assert_eq!(selected_text(&buf, (4, 1), (7, 0), 20), "joined by lines");
+    }
 
     fn titled(version: &str, news: &[(&str, &str)]) -> Title {
         let mut t = Title { version: version.into(), ..Title::default() };
