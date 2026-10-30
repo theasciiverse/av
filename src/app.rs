@@ -210,6 +210,8 @@ pub struct App {
     rx: Receiver<Progress>,
     cast_tx: Sender<CastMsg>,
     cast_rx: Receiver<CastMsg>,
+    /// the catalog being fetched in the background; None when not loading
+    loading: Option<Receiver<anyhow::Result<catalog::Loaded>>>,
     last_tick: Instant,
     /// when the intro started; None once it is over or skipped
     pub intro: Option<Instant>,
@@ -263,6 +265,7 @@ impl App {
             rx,
             cast_tx,
             cast_rx,
+            loading: None,
             last_tick: Instant::now(),
             intro: Some(Instant::now()),
             welcome_due,
@@ -271,8 +274,28 @@ impl App {
         app
     }
 
+    /// Fetch the catalog on a thread, so the intro and the screen keep
+    /// drawing while a slow or dead network makes it wait; `tick` takes
+    /// the result.
     pub fn refresh(&mut self, force: bool) {
-        match catalog::load(&self.catalog_url, &self.paths.cache, force) {
+        if self.loading.is_some() {
+            return;
+        }
+        let (tx, rx) = channel();
+        let (url, cache) = (self.catalog_url.clone(), self.paths.cache.clone());
+        std::thread::spawn(move || {
+            let _ = tx.send(catalog::load(&url, &cache, force));
+        });
+        self.loading = Some(rx);
+        self.status = "loading the catalog".into();
+    }
+
+    pub fn is_loading(&self) -> bool {
+        self.loading.is_some()
+    }
+
+    fn loaded(&mut self, res: anyhow::Result<catalog::Loaded>) {
+        match res {
             Ok(l) => {
                 let mut titles: Vec<Title> = l.catalog.titles.into_values().collect();
                 // grouped by kind (catalog::kind_rank), alphabetical within each
@@ -292,7 +315,10 @@ impl App {
             Err(e) => {
                 log::error!("catalog: {e:#}");
                 self.status = format!("{e:#}");
-                self.modal = Some(Modal::Message(format!("Could not load the catalog.\n\n{e:#}")));
+                // not over the welcome screen; the status line and the empty list say it then
+                if self.modal.is_none() {
+                    self.modal = Some(Modal::Message(format!("Could not load the catalog.\n\n{e:#}")));
+                }
             }
         }
         self.clamp();
@@ -598,6 +624,10 @@ impl App {
         if self.intro.is_some_and(|t| t.elapsed().as_secs_f64() >= INTRO_SECS) {
             self.end_intro();
         }
+        if let Some(res) = self.loading.as_ref().and_then(|rx| rx.try_recv().ok()) {
+            self.loading = None;
+            self.loaded(res);
+        }
         let dt = self.last_tick.elapsed().as_secs_f64();
         self.last_tick = Instant::now();
         while let Ok(p) = self.rx.try_recv() {
@@ -685,7 +715,7 @@ impl App {
                 let src = match std::fs::read_to_string(&file) {
                     Ok(s) => s,
                     Err(_) => {
-                        let s = ureq::get(&url).call()?.body_mut().with_config().limit(256 << 20).read_to_string()?;
+                        let s = catalog::http().get(&url).call()?.body_mut().with_config().limit(256 << 20).read_to_string()?;
                         std::fs::create_dir_all(file.parent().unwrap())?;
                         std::fs::write(&file, &s)?;
                         s

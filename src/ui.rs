@@ -37,8 +37,10 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     match app.current() {
         Some(t) => draw_detail(f, app, &t, detail),
         None => {
-            let msg = if app.titles.is_empty() {
-                "The catalog is empty."
+            let msg = if app.titles.is_empty() && app.is_loading() {
+                "Loading the catalog..."
+            } else if app.titles.is_empty() {
+                "No catalog to show yet. F5 tries again."
             } else if !app.filter.is_empty() {
                 "Nothing matches the search. Esc clears it."
             } else if app.show.installed || app.show.updates || app.show.wishlist {
@@ -125,7 +127,9 @@ fn draw_header(f: &mut Frame, app: &mut App, area: Rect) {
     }
     f.render_widget(Paragraph::new(Line::from(spans)), top);
     let shown = app.visible().len();
-    let count = if app.offline {
+    let count = if app.is_loading() && app.titles.is_empty() {
+        Span::styled("loading the catalog", Style::default().fg(theme::DIM))
+    } else if app.offline {
         Span::styled("offline: cached catalog", Style::default().fg(theme::AMBER))
     } else if shown != app.titles.len() {
         Span::styled(format!("showing {shown} of {}", app.titles.len()), Style::default().fg(theme::DIM))
@@ -920,7 +924,7 @@ fn welcome_text(bin: Option<&std::path::Path>, on_path: bool) -> Text<'static> {
         }
         None => lines.push(text("  Installed titles start from av, or with av play <title>.".into())),
     }
-    lines.push(text("  av never edits your shell's files and adds nothing to your menus.".into()));
+    lines.push(text("  av never edits your shell's files, and titles add nothing to your menus.".into()));
     lines.extend([
         Line::default(),
         head("Fonts"),

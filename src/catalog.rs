@@ -13,6 +13,25 @@ pub const SCHEMA_VERSION: u32 = 1;
 pub const DEFAULT_CATALOG_URL: &str = "https://asciiverse.sh/catalog.json";
 const CACHE_TTL: Duration = Duration::from_secs(60 * 60);
 
+/// The one HTTP agent for the catalog, casts and downloads. ureq waits
+/// forever by default, so a host that drops packets (a parked domain, a
+/// dead Wi-Fi) froze av on a blank screen; these give up on connecting and
+/// on a silent server, and leave reading the body alone, however long a
+/// big download takes.
+pub fn http() -> &'static ureq::Agent {
+    static AGENT: std::sync::OnceLock<ureq::Agent> = std::sync::OnceLock::new();
+    AGENT.get_or_init(|| {
+        let s = |n| Some(Duration::from_secs(n));
+        ureq::Agent::config_builder()
+            .timeout_resolve(s(5))
+            .timeout_connect(s(5))
+            .timeout_send_request(s(10))
+            .timeout_recv_response(s(15))
+            .build()
+            .into()
+    })
+}
+
 #[derive(Debug, Deserialize)]
 pub struct Catalog {
     pub titles: BTreeMap<String, Title>,
@@ -266,7 +285,7 @@ pub fn load(url: &str, cache_dir: &Path, force: bool) -> Result<Loaded> {
 }
 
 fn fetch(url: &str) -> Result<String> {
-    Ok(ureq::get(url).call()?.body_mut().with_config().limit(64 << 20).read_to_string()?)
+    Ok(http().get(url).call()?.body_mut().with_config().limit(64 << 20).read_to_string()?)
 }
 
 #[cfg(test)]

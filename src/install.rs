@@ -64,7 +64,7 @@ fn run(job: &Job, tx: &Sender<Progress>) -> Result<Installed> {
         let _ = tx.send(Progress::Status { id: t.id.clone(), msg: msg.into() });
     };
     status("downloading");
-    let mut resp = ureq::get(&url).call().with_context(|| format!("download {url}"))?;
+    let mut resp = catalog::http().get(&url).call().with_context(|| format!("download {url}"))?;
     let total = resp.body().content_length().unwrap_or(plat.size);
     let mut reader = resp.body_mut().as_reader();
     let mut file = std::fs::File::create(&archive)?;
