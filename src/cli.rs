@@ -598,10 +598,9 @@ impl Bar {
         } else {
             format!("{}/s", human(speed as u64))
         };
-        let info = if total > 0 {
-            format!(" {:>3}%  {} / {}  {rate}", done * 100 / total, human(done), human(total))
-        } else {
-            format!("  {}  {rate}", human(done))
+        let info = match (done * 100).checked_div(total) {
+            Some(pct) => format!(" {pct:>3}%  {} / {}  {rate}", human(done), human(total)),
+            None => format!("  {}  {rate}", human(done)),
         };
         let cols = terminal::size().map(|s| s.0 as usize).unwrap_or(80);
         let w = cols.saturating_sub(2 + info.chars().count() + 1).clamp(10, 40);

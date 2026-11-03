@@ -106,6 +106,13 @@ and av has had its first public release.
   its `[exec]`), for titles that draw there or need it to be a terminal;
   found by hub's smoke test (typespeed, clidle, warp)
 
+## 0.9.12: built
+
+- [x] The Debian package passes newer lintian (Ubuntu 24.04's names the
+  static musl binary an error; it is static on purpose), so the release
+  run completes
+- [x] Clean under Rust 1.99's new clippy checks
+
 ## 1.0.0
 
 - [ ] Run and checked on macOS and Windows, and CI passing on all three

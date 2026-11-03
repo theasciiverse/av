@@ -3,3 +3,6 @@
 av: package-section-games-but-contains-no-game
 # a static-pie musl binary, which lintian takes for a shared library
 av: shared-library-lacks-prerequisites [usr/bin/av]
+# static on purpose: one musl build runs on every distribution; newer lintian
+# (Ubuntu 24.04's) names this as an error
+av: statically-linked-binary [usr/bin/av]

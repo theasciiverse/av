@@ -88,7 +88,7 @@ pub fn index(titles: &mut [Title], cols: &Collections) {
 
 /// The list's order: by group, alphabetical within each.
 pub fn sort(titles: &mut [Title]) {
-    titles.sort_by(|a, b| (rank(a), a.title.to_lowercase()).cmp(&(rank(b), b.title.to_lowercase())));
+    titles.sort_by_cached_key(|t| (rank(t), t.title.to_lowercase()));
 }
 
 /// Installed titles the catalog no longer lists, as titles of their own, so

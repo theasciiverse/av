@@ -610,7 +610,8 @@ impl App {
                     }
                 }
                 Some(PaneRow::Download(i)) => {
-                    if self.downloads.retry(i) {
+                    let retried = self.downloads.retry(i);
+                    if retried {
                         self.pump();
                     }
                 }
