@@ -175,12 +175,16 @@ pub struct Title {
     pub haystack: String,
 }
 
-/// `[exec]`: the binary to run, named by kind (`game = "greed"`), and the
-/// arguments av passes when it launches it (`args = ["-f"]`).
+/// `[exec]`: the binary to run, named by kind (`game = "greed"`), the
+/// arguments av passes when it launches it (`args = ["-f"]`), and
+/// `stderr = "terminal"` for a title that draws on stderr or needs it to be
+/// the terminal (otherwise av sends stderr to the title's log).
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct Exec {
     #[serde(default)]
     pub args: Vec<String>,
+    #[serde(default)]
+    pub stderr: Option<String>,
     #[serde(flatten)]
     pub names: BTreeMap<String, serde_json::Value>,
 }
@@ -479,6 +483,14 @@ mod tests {
         assert!(t.exec_name().starts_with("greed"));
         let t: Title = serde_json::from_str(r#"{"id":"solitty"}"#).unwrap();
         assert!(t.exec_name().starts_with("solitty"));
+        assert_eq!(t.exec.stderr, None);
+    }
+
+    #[test]
+    fn stderr_on_the_terminal_is_not_taken_for_the_binary() {
+        let t: Title = serde_json::from_str(r#"{"id":"warp","exec":{"stderr":"terminal","game":"warp"}}"#).unwrap();
+        assert_eq!(t.exec.stderr.as_deref(), Some("terminal"));
+        assert!(t.exec_name().starts_with("warp"));
     }
 
     fn catalog(body: &str) -> Catalog {

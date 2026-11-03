@@ -100,6 +100,12 @@ and av has had its first public release.
   the catalog", to play or uninstall
 - [x] Searching and drawing the list does far less work each frame
 
+## 0.9.11: built
+
+- [x] A title can keep stderr on the terminal (`stderr = "terminal"` in
+  its `[exec]`), for titles that draw there or need it to be a terminal;
+  found by hub's smoke test (typespeed, clidle, warp)
+
 ## 1.0.0
 
 - [ ] Run and checked on macOS and Windows, and CI passing on all three

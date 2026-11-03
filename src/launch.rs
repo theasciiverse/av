@@ -196,8 +196,9 @@ pub fn lera(paths: &crate::paths::Paths) -> Option<PathBuf> {
 
 /// The command that starts a title: its binary with the catalog's arguments,
 /// run from its install folder, or for a MUD, Lera (telnet as the fallback).
-/// The log is where the title's stderr goes.
-pub fn command(paths: &crate::paths::Paths, t: &crate::catalog::Title, installed: Option<&crate::state::Installed>) -> Result<(Command, PathBuf), String> {
+/// The log is where the title's stderr goes, unless the title keeps it on
+/// the terminal (`stderr = "terminal"` in its `[exec]`).
+pub fn command(paths: &crate::paths::Paths, t: &crate::catalog::Title, installed: Option<&crate::state::Installed>) -> Result<(Command, Option<PathBuf>), String> {
     let cmd = if let Some(c) = &t.connect {
         // Lera finds the world by id in the same cached catalog; telnet is the fallback
         if let Some(lera) = lera(paths) {
@@ -221,7 +222,8 @@ pub fn command(paths: &crate::paths::Paths, t: &crate::catalog::Title, installed
         cmd.args(&t.exec.args).current_dir(&dir);
         cmd
     };
-    Ok((cmd, paths.cache.join("logs").join(format!("{}.log", t.id))))
+    let log = (t.exec.stderr.as_deref() != Some("terminal")).then(|| paths.cache.join("logs").join(format!("{}.log", t.id)));
+    Ok((cmd, log))
 }
 
 /// "23 min", "1 h 05 min", "40 s"

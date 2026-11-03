@@ -130,7 +130,7 @@ fn run(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> Result<()> {
 fn launch(app: &mut App, t: &catalog::Title) {
     match launch::command(&app.paths, t, app.state.installed.get(&t.id)) {
         Ok((cmd, log)) => {
-            let outcome = launch::run(cmd, Some(log));
+            let outcome = launch::run(cmd, log);
             app.finished(t, outcome);
         }
         Err(e) => app.status = e,

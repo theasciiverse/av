@@ -382,7 +382,7 @@ impl Ctx {
         }
         let (mut cmd, log) = crate::launch::command(&self.paths, &t, self.state.installed.get(&t.id)).map_err(anyhow::Error::msg)?;
         cmd.args(extra);
-        let o = crate::launch::run(cmd, Some(log));
+        let o = crate::launch::run(cmd, log);
         self.state.record_play(&t.id, o.seconds);
         self.state.save()?;
         match &o.status {
