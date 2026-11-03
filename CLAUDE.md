@@ -347,7 +347,12 @@ decide: a list-only fallback with the preview full screen on demand.
   the number from the catalog and never shows GitHub text, so a different
   backend later changes only the build. Liking needs a GitHub account; a
   key in `av` opens the title's discussion in the browser (prints the link
-  over SSH). Not checked yet: whether a locked discussion still takes votes.
+  over SSH). Each discussion is locked with "allow emoji reactions" ticked:
+  only people with write access can comment, everyone else can still upvote
+  and react (checked 2026-11-03 against 60 locked discussions as an outside
+  viewer: the 3 locked that way allowed both, the other 57 neither). The
+  API's lock call has no reactions option, so that lock is set in the web
+  page, once per title.
 - Pixel-image rendering (`ratatui-image`, `mdfried`) is not needed; casts
   replace screenshots.
 
