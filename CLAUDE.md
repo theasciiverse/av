@@ -337,8 +337,17 @@ decide: a list-only fallback with the preview full screen on demand.
   update"; `av info` prints the newest. hub's generator fills it from the
   GitHub Release bodies; the mockup's `dev/build_catalog.py` stands in with
   each game's ROADMAP section for its version, or its CHANGELOG.
-- **Ratings:** none to begin with (no server). GitHub star or reaction counts
-  could be added at catalog build time later at no infrastructure cost.
+- **Likes, not ratings or reviews** (David, 2026-11-03): one like count per
+  title ("♥ 42 players like this") and a "Most liked" sort; the default order
+  is unchanged. No written reviews, no thumbs-down, no percentage, so there
+  is no toxic text to moderate and small or old titles are not marked down.
+  Kept on GitHub until the platform grows: one discussion per title in the
+  `hub` repo, opened by the catalog build; its upvotes (or 👍 reactions) are
+  the likes, read into `catalog.json` at catalog build time. `av` reads only
+  the number from the catalog and never shows GitHub text, so a different
+  backend later changes only the build. Liking needs a GitHub account; a
+  key in `av` opens the title's discussion in the browser (prints the link
+  over SSH). Not checked yet: whether a locked discussion still takes votes.
 - Pixel-image rendering (`ratatui-image`, `mdfried`) is not needed; casts
   replace screenshots.
 
@@ -372,10 +381,9 @@ bundled, called or copied from.
   installed), or run the title in a pseudo-terminal inside `av` and write v3
   lines itself (the file is trivial; the pseudo-terminal, especially on
   Windows, is the real work; crates not researched yet).
-- "Write a review": a deep link to a pre-filled GitHub Discussions URL
-  (`.../discussions/new?category=...&title=...&body=...`), opened in the
-  browser, no auth in `av`. Posting directly from `av` via GitHub's OAuth
-  device flow would be `av`'s first authentication surface, so not default.
+- Liking from inside `av` via GitHub's OAuth device flow, instead of the
+  browser. It would be `av`'s first authentication surface, so not default.
+  (Written reviews were dropped on 2026-11-03; see Likes above.)
 - Multiple or movable library locations (`directories` already honors
   `$XDG_DATA_HOME`).
 - Movie launching: the manifest field for movies is deferred until movie
