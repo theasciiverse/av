@@ -119,6 +119,11 @@ and av has had its first public release.
   their click areas sat on a fixed row and missed whenever the
   description wrapped; found in the first Windows test
 
+## 0.9.14: built
+
+- [x] "F5 refresh" in the menu row, clickable, where the row has room:
+  fetching the catalog again was only in F1 help and the list's key line
+
 ## 1.0.0
 
 - [ ] Run and checked on macOS and Windows, and CI passing on all three

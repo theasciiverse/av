@@ -155,12 +155,22 @@ fn draw_header(f: &mut Frame, app: &mut App, area: Rect) {
     } else {
         theme::DIM
     };
-    let links = [
+    let mut links = vec![
         ("F1 help".to_string(), Hit::Help, theme::DIM),
         (dl_label, Hit::Downloads, dl_color),
+        // amber while the catalog is being fetched
+        ("F5 refresh".to_string(), Hit::Refresh, if app.is_loading() { theme::AMBER } else { theme::DIM }),
         ("♥ support".to_string(), Hit::Support, theme::AMBER),
     ];
-    let lw: u16 = links.iter().map(|(l, _, _)| l.chars().count() as u16).sum::<u16>() + 3 * (links.len() as u16 - 1);
+    let width_of = |ls: &[(String, Hit, ratatui::style::Color)]| -> u16 {
+        ls.iter().map(|(l, _, _)| l.chars().count() as u16).sum::<u16>() + 3 * (ls.len() as u16).saturating_sub(1)
+    };
+    // F5 shows only where the row has room for it; F1 help and the key
+    // line name it everywhere
+    if width_of(&links) > bottom.width {
+        links.retain(|(_, h, _)| !matches!(h, Hit::Refresh));
+    }
+    let lw = width_of(&links);
     let mut x = (bottom.x + bottom.width).saturating_sub(lw);
     let mut spans = Vec::new();
     for (i, (label, hit, color)) in links.into_iter().enumerate() {

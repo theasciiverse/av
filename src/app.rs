@@ -167,6 +167,8 @@ pub enum Hit {
     AvUpdate,
     /// the menu row's download line and its F2 link
     Downloads,
+    /// the menu row's F5 link: fetch the catalog again
+    Refresh,
     /// an action button, by index into `actions()`
     Button(usize),
     /// a button in an open choice dialog, by index into its options
@@ -1044,6 +1046,7 @@ impl App {
             (MouseEventKind::Down(MouseButton::Left), Some(Hit::Support)) => self.support(),
             (MouseEventKind::Down(MouseButton::Left), Some(Hit::AvUpdate)) => self.av_update(),
             (MouseEventKind::Down(MouseButton::Left), Some(Hit::Downloads)) => self.open_downloads(),
+            (MouseEventKind::Down(MouseButton::Left), Some(Hit::Refresh)) => self.refresh(true),
             (MouseEventKind::Down(MouseButton::Left), Some(Hit::ShowRow(i))) => {
                 self.focus = Focus::Show;
                 self.show_row = i;
