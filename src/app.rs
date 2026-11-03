@@ -32,8 +32,7 @@ pub struct Show {
 }
 
 /// Where donations to Asciiverse go: the same list as the website's Support
-/// menu (`SUPPORT` in websites/Asciiverse/js/site.js), kept in step by hand.
-/// Neither page exists yet (checked 2026-10-13).
+/// menu (`SUPPORT` in hub/site/js/site.js), kept in step by hand.
 pub const SUPPORT: [(&str, &str); 2] = [
     ("GitHub Sponsors", "https://github.com/sponsors/theasciiverse"),
     ("Patreon", "https://www.patreon.com/asciiverse"),
@@ -656,6 +655,7 @@ impl App {
 
     fn support(&mut self) {
         let mut options: Vec<(String, Then)> = SUPPORT.iter().map(|(n, u)| (n.to_string(), Then::Open(u.to_string()))).collect();
+        options.push(("More ways to help".into(), Then::Open("https://asciiverse.sh/support.html".into())));
         options.push(("Close".into(), Then::Cancel));
         let links: String = SUPPORT.iter().map(|(n, u)| format!("\n  {n}: {u}")).collect();
         self.modal = Some(Modal::Choice {
