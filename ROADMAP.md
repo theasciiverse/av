@@ -113,6 +113,12 @@ and av has had its first public release.
   run completes
 - [x] Clean under Rust 1.99's new clippy checks
 
+## 0.9.13: built
+
+- [x] The buttons beside the preview (wide terminals) answer the mouse:
+  their click areas sat on a fixed row and missed whenever the
+  description wrapped; found in the first Windows test
+
 ## 1.0.0
 
 - [ ] Run and checked on macOS and Windows, and CI passing on all three

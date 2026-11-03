@@ -467,7 +467,12 @@ fn draw_detail(f: &mut Frame, app: &mut App, t: &Title, area: Rect) {
             Line::default(),
             buttons(app, t),
         ];
-        place(pw + 1, 3, &lines[3], &mut button_at);
+        // the buttons sit below the title and description as they wrap in
+        // this narrow column, not on a fixed row: a two-line description
+        // pushes them down, and their click areas must go down with them
+        let side_text_w = side_w.saturating_sub(1).max(1);
+        let above = Paragraph::new(lines[..3].to_vec()).wrap(Wrap { trim: true }).line_count(side_text_w) as u16;
+        place(pw + 1, above, &lines[3], &mut button_at);
         lines.extend(progress(app, t));
         lines.push(Line::default());
         lines.extend(facts(app, t));
@@ -1370,6 +1375,32 @@ mod tests {
         assert_eq!(all, "Points joined by lines along every row.\n\nNext paragraph.");
         // from the middle of a row to the middle of a later one, dragged backwards
         assert_eq!(selected_text(&buf, (4, 1), (7, 0), 20), "joined by lines");
+    }
+
+    #[test]
+    fn buttons_beside_the_preview_are_clickable_where_they_are_drawn() {
+        // wide enough for the side-by-side layout, with a description that
+        // wraps over several rows in the narrow column beside the preview
+        let mut a = app("buttons-beside");
+        let t = Title {
+            id: "wide".into(),
+            title: "Wide".into(),
+            description: "A description long enough to wrap over several rows in the narrow column that sits beside the preview, pushing the buttons down".into(),
+            ..Title::default()
+        };
+        let mut term = ratatui::Terminal::new(TestBackend::new(200, 60)).unwrap();
+        term.draw(|f| draw_detail(f, &mut a, &t, f.area())).unwrap();
+        let buf = term.backend().buffer().clone();
+        let labels: Vec<String> = a.actions(&t).iter().map(|(_, l, _)| l.to_string()).collect();
+        let mut seen = 0;
+        for (r, h) in &a.hits {
+            if let Hit::Button(i) = h {
+                let under: String = (r.x..r.x + r.width).map(|x| buf[(x, r.y)].symbol().to_string()).collect();
+                assert!(under.contains(labels[*i].as_str()), "button {i} ({}) is clickable over {under:?}", labels[*i]);
+                seen += 1;
+            }
+        }
+        assert_eq!(seen, labels.len(), "every button has a click area");
     }
 
     fn titled(version: &str, news: &[(&str, &str)]) -> Title {
