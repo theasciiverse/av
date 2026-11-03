@@ -208,6 +208,9 @@ pub struct App {
     /// the list's scroll position, in rows, kept between frames so the list
     /// only moves when the selection would leave the view
     pub list_offset: usize,
+    /// The last move in the list was a click: keep the list still, with no
+    /// scroll margin, so the clicked title stays under the pointer.
+    pub list_clicked: bool,
     pub focus: Focus,
     pub action: usize,
     pub page_scroll: u16,
@@ -292,6 +295,7 @@ impl App {
             filter: String::new(),
             selected: 0,
             list_offset: 0,
+            list_clicked: false,
             focus: Focus::List,
             action: 0,
             page_scroll: 0,
@@ -722,6 +726,7 @@ impl App {
     }
 
     fn select(&mut self, i: usize) {
+        self.list_clicked = false;
         if i != self.selected {
             self.selected = i;
             self.selection = None;
@@ -1036,6 +1041,7 @@ impl App {
             }
             (MouseEventKind::Down(MouseButton::Left), Some(Hit::Row(i))) => {
                 self.select(i);
+                self.list_clicked = true;
                 self.focus = Focus::List;
             }
             (MouseEventKind::Down(MouseButton::Left), Some(Hit::ShowHead)) => {

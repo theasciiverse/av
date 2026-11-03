@@ -421,7 +421,10 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
     }
     let list = List::new(items)
         .block(pane(app.focus == Focus::List, " titles "))
-        .highlight_style(Style::default().bg(theme::PANEL_HI).add_modifier(Modifier::BOLD));
+        .highlight_style(Style::default().bg(theme::PANEL_HI).add_modifier(Modifier::BOLD))
+        // the list scrolls before the selection reaches an edge, so the next
+        // titles are always in view (ratatui shrinks it on a short list)
+        .scroll_padding(if app.list_clicked { 0 } else { LIST_SCROLL_MARGIN });
     // a fresh offset each frame would scroll the selection to the bottom
     // edge, so clicking a row made the list jump under the pointer
     let mut st = ListState::default().with_offset(app.list_offset).with_selected(Some(selected_row));
@@ -436,6 +439,9 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
         }
     }
 }
+
+/// Rows kept in view above and below the selected title while moving through the list.
+const LIST_SCROLL_MARGIN: usize = 6;
 
 /// Rows the scrolling column may hold below the preview; pages are short.
 const COLUMN_SPARE: u16 = 400;
@@ -1411,6 +1417,50 @@ mod tests {
             }
         }
         assert_eq!(seen, labels.len(), "every button has a click area");
+    }
+
+    #[test]
+    fn the_list_scrolls_before_the_selection_reaches_the_edge() {
+        let mut a = app("scroll-margin");
+        a.titles = (0..60)
+            .map(|i| Title { id: format!("t{i:02}"), title: format!("Title {i:02}"), kind: "game".into(), ..Title::default() })
+            .collect();
+        let (h, inner) = (22u16, 20usize);
+        let mut term = ratatui::Terminal::new(TestBackend::new(40, h)).unwrap();
+        // title i is list row i + 1, under the "games" section line
+        let rows_below = |a: &App| (a.list_offset + inner).saturating_sub(a.selected + 1 + 1);
+        for i in 0..60 {
+            a.selected = i;
+            term.draw(|f| draw_list(f, &mut a, f.area())).unwrap();
+            let below = rows_below(&a);
+            let left = 59 - i;
+            assert!(below >= LIST_SCROLL_MARGIN.min(left), "at title {i}, only {below} rows show below it");
+        }
+        // at the end of the list the selection sits on the last line
+        assert_eq!(rows_below(&a), 0);
+        // and back up: the margin holds above it too
+        for i in (0..60).rev() {
+            a.selected = i;
+            term.draw(|f| draw_list(f, &mut a, f.area())).unwrap();
+            let above = (i + 1) - a.list_offset;
+            assert!(above >= LIST_SCROLL_MARGIN.min(i + 1), "at title {i}, only {above} rows show above it");
+        }
+        assert_eq!(a.list_offset, 0);
+    }
+
+    #[test]
+    fn a_click_near_the_edge_does_not_move_the_list() {
+        let mut a = app("scroll-click");
+        a.titles = (0..60)
+            .map(|i| Title { id: format!("t{i:02}"), title: format!("Title {i:02}"), kind: "game".into(), ..Title::default() })
+            .collect();
+        let mut term = ratatui::Terminal::new(TestBackend::new(40, 22)).unwrap();
+        term.draw(|f| draw_list(f, &mut a, f.area())).unwrap();
+        // the second-to-last row on screen, inside the margin
+        a.selected = 17;
+        a.list_clicked = true;
+        term.draw(|f| draw_list(f, &mut a, f.area())).unwrap();
+        assert_eq!(a.list_offset, 0, "the clicked title stays under the pointer");
     }
 
     fn titled(version: &str, news: &[(&str, &str)]) -> Title {
