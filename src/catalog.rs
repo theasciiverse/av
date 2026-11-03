@@ -9,7 +9,9 @@ use anyhow::{Context, Result};
 use serde::Deserialize;
 
 pub const SCHEMA_VERSION: u32 = 1;
-/// Where hub publishes the catalog. Not decided yet; override with AV_CATALOG_URL.
+/// Where hub publishes the catalog (served by hub/site/_redirects from
+/// data/catalog.json, which the website reads); override with AV_CATALOG_URL.
+/// Lera uses the same default to find av's cache file (see `cache_file`).
 pub const DEFAULT_CATALOG_URL: &str = "https://asciiverse.sh/catalog.json";
 const CACHE_TTL: Duration = Duration::from_secs(60 * 60);
 
@@ -312,6 +314,11 @@ pub fn url() -> String {
 
 /// One cache file per catalog address, so a cache of one catalog is never
 /// taken for another (pointing AV_CATALOG_URL elsewhere, offline or not).
+///
+/// This name is a contract: Lera (programs/lera, src/paths.rs) computes the
+/// same `catalog-<fnv1a of the URL>.json` to read its list of MUDs from
+/// av's cache. Change this, `fnv1a` or `DEFAULT_CATALOG_URL` and Lera needs
+/// the same change.
 pub(crate) fn cache_file(cache_dir: &Path, url: &str) -> std::path::PathBuf {
     cache_dir.join(format!("catalog-{:016x}.json", fnv1a(url)))
 }
