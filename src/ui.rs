@@ -1218,12 +1218,13 @@ fn draw_modal(f: &mut Frame, app: &App, m: &Modal, area: Rect) -> Vec<(Rect, Hit
         }
         Modal::Help => {
             let text = help_text(&app.paths.log(), app.av_newer.as_ref());
-            let h = text.lines.len() as u16 + 2;
+            // as tall as it wraps to: a long log path takes two rows
+            let h = wrapped_height(&text, 76 - 2) + 2;
             (" help ", text, 76, h)
         }
         Modal::Welcome => {
             let text = welcome_text(app.paths.bin.as_deref(), app.paths.bin_on_path());
-            let h = text.lines.len() as u16 + 2;
+            let h = wrapped_height(&text, 76 - 2) + 2;
             (" welcome ", text, 76, h)
         }
         Modal::Message(s) => {

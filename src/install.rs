@@ -369,6 +369,7 @@ const SCRIPT_MARK: &str = "#!/bin/sh\n# av: ";
 
 /// Whether av may replace `l` in ~/.local/bin: a script of av's, or a
 /// symlink into av's install folders (how av linked titles before).
+#[cfg(unix)]
 fn replaceable(l: &Path, dest: &Path) -> bool {
     let root = dest.parent().and_then(Path::parent).unwrap_or(dest);
     match std::fs::read_link(l) {
@@ -629,7 +630,11 @@ mod tests {
         run(&home.job(t, &format!("{base}/catalog.json")), &tx).unwrap();
         let out = std::process::Command::new(home.bin().join("game")).arg("more").output().unwrap();
         let dest = fs::canonicalize(home.dest()).unwrap();
-        assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), format!("{}|-d it's here more", dest.display()));
+        // the shell's pwd may name the folder another way (macOS: /var is /private/var)
+        let out = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        let (dir, rest) = out.split_once('|').expect("pwd|args");
+        assert_eq!(fs::canonicalize(dir).unwrap(), dest);
+        assert_eq!(rest, "-d it's here more");
         uninstall(&home.dest(), Some(&home.bin()), "game", &home.saves(), true).unwrap();
         assert!(home.bin().join("game").symlink_metadata().is_err(), "uninstall takes the script away");
     }

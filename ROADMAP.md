@@ -124,6 +124,15 @@ and av has had its first public release.
 - [x] "F5 refresh" in the menu row, clickable, where the row has room:
   fetching the catalog again was only in F1 help and the list's key line
 
+## 0.9.15: built
+
+- [x] Detail pane buttons one width with room around the label, two cells
+  tall where the pane has the rows (always beside the preview, under it
+  from about 42 rows); the title amber and bold with a rule under it
+- [x] Help and welcome are as tall as their text wraps to: a long log or
+  bin path (macOS) made them scroll on a tall terminal
+- [x] CI green on macOS and Windows again
+
 ## 1.0.0
 
 - [ ] Run and checked on macOS and Windows, and CI passing on all three
