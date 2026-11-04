@@ -463,49 +463,57 @@ fn draw_detail(f: &mut Frame, app: &mut App, t: &Title, area: Rect) {
 
     let mut text = Text::default();
     let page_y;
-    // button positions in the off-screen column: (x, y, width)
-    let mut button_at: Vec<(u16, u16, u16)> = Vec::new();
-    let place = |x0: u16, y: u16, line: &Line, out: &mut Vec<(u16, u16, u16)>| {
-        let mut x = x0;
-        for (k, span) in line.spans.iter().enumerate() {
-            let w = span.width() as u16;
-            if k % 2 == 0 {
-                out.push((x, y, w)); // even spans are buttons, odd ones the gaps
-            }
-            x += w;
+    // button click areas in the off-screen column
+    let mut button_at: Vec<Rect> = Vec::new();
+    let mut place = |x0: u16, y: u16, b: &Buttons, buf: &mut Buffer| {
+        for (k, line) in b.lines.iter().enumerate() {
+            Paragraph::new(line.clone()).render(Rect { x: x0, y: y + k as u16, width: b.width, height: 1 }, buf);
         }
+        button_at.extend(b.at.iter().map(|&(x, w)| Rect { x: x0 + x, y, width: w, height: b.height() }));
     };
     if side_by_side {
-        // wide terminals: everything about the title beside the preview
-        let mut lines = vec![
-            Line::from(Span::styled(t.title.clone(), Style::default().fg(theme::TEXT_HI).add_modifier(Modifier::BOLD))),
+        // wide terminals: everything about the title beside the preview,
+        // with tall buttons, as there is room for them here
+        let side_text_w = side_w.saturating_sub(1).max(1);
+        let lines = vec![
+            Line::from(Span::styled(t.title.clone(), title_style())),
+            title_rule(t, side_text_w),
             Line::from(Span::styled(t.description.clone(), Style::default().fg(theme::DIM))),
             Line::default(),
-            buttons(app, t),
         ];
         // the buttons sit below the title and description as they wrap in
         // this narrow column, not on a fixed row: a two-line description
         // pushes them down, and their click areas must go down with them
-        let side_text_w = side_w.saturating_sub(1).max(1);
-        let above = Paragraph::new(lines[..3].to_vec()).wrap(Wrap { trim: true }).line_count(side_text_w) as u16;
-        place(pw + 1, above, &lines[3], &mut button_at);
-        lines.extend(progress(app, t));
-        lines.push(Line::default());
-        lines.extend(facts(app, t));
-        Paragraph::new(lines).wrap(Wrap { trim: true }).render(Rect { x: pw + 1, y: 0, width: side_w.saturating_sub(1), height: ph }, &mut buf);
+        let para = Paragraph::new(lines).wrap(Wrap { trim: true });
+        let above = para.line_count(side_text_w) as u16;
+        para.render(Rect { x: pw + 1, y: 0, width: side_text_w, height: ph }, &mut buf);
+        let b = buttons(app, t, true, side_text_w);
+        place(pw + 1, above, &b, &mut buf);
+        let mut rest: Vec<Line> = progress(app, t).into_iter().collect();
+        rest.push(Line::default());
+        rest.extend(facts(app, t));
+        let y = above + b.height();
+        Paragraph::new(rest).wrap(Wrap { trim: true }).render(Rect { x: pw + 1, y, width: side_text_w, height: ph.saturating_sub(y) }, &mut buf);
         page_y = ph;
     } else {
-        // title and buttons on one row, description under it, facts in the flow
-        let b = buttons(app, t);
-        let bw = b.width() as u16;
-        place(pw.saturating_sub(bw), ph, &b, &mut button_at);
-        Paragraph::new(Span::styled(t.title.clone(), Style::default().fg(theme::TEXT_HI).add_modifier(Modifier::BOLD)))
-            .render(Rect { x: 0, y: ph, width: pw.saturating_sub(bw + 1), height: 1 }, &mut buf);
-        Paragraph::new(b).alignment(Alignment::Right).render(Rect { x: 0, y: ph, width: pw, height: 1 }, &mut buf);
+        // under the preview: tall buttons on the right when the pane has the
+        // rows to spare, with the title and its rule beside them; on a
+        // minimum-size terminal one row of title and buttons
+        let tall = area.height >= ph + 7;
+        let b = buttons(app, t, tall, pw / 2);
+        let bx = pw.saturating_sub(b.width);
+        place(bx, ph, &b, &mut buf);
+        let name_w = pw.saturating_sub(b.width + 1);
+        let name_y = if tall { ph + 1 } else { ph };
+        Paragraph::new(Span::styled(t.title.clone(), title_style())).render(Rect { x: 0, y: name_y, width: name_w, height: 1 }, &mut buf);
+        if tall {
+            Paragraph::new(title_rule(t, name_w)).render(Rect { x: 0, y: ph + 2, width: name_w, height: 1 }, &mut buf);
+        }
+        let desc_y = ph + b.height();
         let line = progress(app, t)
             .unwrap_or_else(|| Line::from(Span::styled(t.description.clone(), Style::default().fg(theme::DIM))));
-        Paragraph::new(line).wrap(Wrap { trim: true }).render(Rect { x: 0, y: ph + 1, width: pw, height: 2 }, &mut buf);
-        page_y = ph + 2 + u16::from(t.description.chars().count() > pw as usize);
+        Paragraph::new(line).wrap(Wrap { trim: true }).render(Rect { x: 0, y: desc_y, width: pw, height: 2 }, &mut buf);
+        page_y = desc_y + 1 + u16::from(t.description.chars().count() > pw as usize);
         text.lines.extend(facts(app, t));
         text.lines.push(Line::default());
     }
@@ -553,9 +561,12 @@ fn draw_detail(f: &mut Frame, app: &mut App, t: &Title, area: Rect) {
             out[(area.x + x, area.y + y)] = cell;
         }
     }
-    for (i, (x, y, w)) in button_at.into_iter().enumerate() {
-        if y >= top && y - top < area.height {
-            app.hits.push((Rect { x: area.x + x, y: area.y + y - top, width: w, height: 1 }, Hit::Button(i)));
+    // each button row that is on screen answers the mouse
+    for (i, r) in button_at.into_iter().enumerate() {
+        for y in r.y..r.y + r.height {
+            if y >= top && y - top < area.height {
+                app.hits.push((Rect { x: area.x + r.x, y: area.y + y - top, width: r.width, height: 1 }, Hit::Button(i)));
+            }
         }
     }
     // say when there is more above or below
@@ -638,21 +649,76 @@ fn mud_card(t: &Title, lera: bool) -> Text<'static> {
     Text::from(l)
 }
 
-fn buttons(app: &App, t: &Title) -> Line<'static> {
-    let mut spans = Vec::new();
-    for (i, (_, label, enabled)) in app.actions(t).iter().enumerate() {
-        let sel = app.focus == Focus::Actions && app.action == i;
-        let st = match (enabled, sel) {
-            (false, _) => Style::default().fg(theme::FAINT).bg(theme::PANEL_HI),
-            (true, true) => Style::default().fg(theme::BG).bg(theme::GREEN_HI).add_modifier(Modifier::BOLD),
-            (true, false) => Style::default().fg(theme::GREEN_HI).bg(theme::PANEL_HI),
-        };
-        if i > 0 {
-            spans.push(Span::raw(" "));
-        }
-        spans.push(Span::styled(format!(" {label} "), st));
+/// The title's buttons as drawn: one row, or three when tall, where a `▄`
+/// row over the label and a `▀` row under it, in the button's own color,
+/// make one solid block two cells high.
+struct Buttons {
+    lines: Vec<Line<'static>>,
+    /// each button's column from the left edge of the row, and its width
+    at: Vec<(u16, u16)>,
+    width: u16,
+}
+
+impl Buttons {
+    fn height(&self) -> u16 {
+        self.lines.len() as u16
     }
-    Line::from(spans)
+}
+
+/// The widest layout that fits in `max_w`: every button one width with
+/// roomy padding, then less padding, then each as wide as its own label.
+fn buttons(app: &App, t: &Title, tall: bool, max_w: u16) -> Buttons {
+    let acts = app.actions(t);
+    let label_w: Vec<u16> = acts.iter().map(|(_, l, _)| Span::raw(l.clone()).width() as u16).collect();
+    let widest = label_w.iter().copied().max().unwrap_or(0);
+    let n = acts.len() as u16;
+    // (same width for all, padding each side, gap between)
+    let tries = [(true, 3, 2), (true, 2, 2), (false, 2, 2), (false, 1, 1)];
+    let total = |(same, pad, gap): (bool, u16, u16)| {
+        label_w.iter().map(|w| if same { widest } else { *w } + 2 * pad).sum::<u16>() + gap * n.saturating_sub(1)
+    };
+    let (same, pad, gap) = tries.into_iter().find(|t| total(*t) <= max_w).unwrap_or(tries[3]);
+
+    let (mut top, mut mid, mut bot, mut at) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    let mut x = 0;
+    for (i, (_, label, enabled)) in acts.iter().enumerate() {
+        let sel = app.focus == Focus::Actions && app.action == i;
+        let (fg, bg) = match (enabled, sel) {
+            (false, _) => (theme::FAINT, theme::PANEL_HI),
+            (true, true) => (theme::BG, theme::GREEN_HI),
+            (true, false) => (theme::GREEN_HI, theme::PANEL_HI),
+        };
+        let mut st = Style::default().fg(fg).bg(bg);
+        if sel {
+            st = st.add_modifier(Modifier::BOLD);
+        }
+        if i > 0 {
+            for row in [&mut top, &mut mid, &mut bot] {
+                row.push(Span::raw(" ".repeat(gap as usize)));
+            }
+            x += gap;
+        }
+        let w = if same { widest } else { label_w[i] } + 2 * pad;
+        let left = (w - label_w[i]) / 2;
+        let right = w - label_w[i] - left;
+        mid.push(Span::styled(format!("{}{label}{}", " ".repeat(left as usize), " ".repeat(right as usize)), st));
+        top.push(Span::styled("▄".repeat(w as usize), Style::default().fg(bg)));
+        bot.push(Span::styled("▀".repeat(w as usize), Style::default().fg(bg)));
+        at.push((x, w));
+        x += w;
+    }
+    let lines = if tall { vec![Line::from(top), Line::from(mid), Line::from(bot)] } else { vec![Line::from(mid)] };
+    Buttons { lines, at, width: x }
+}
+
+/// The title's name, set apart from everything under it.
+fn title_style() -> Style {
+    Style::default().fg(theme::AMBER).add_modifier(Modifier::BOLD)
+}
+
+fn title_rule(t: &Title, max_w: u16) -> Line<'static> {
+    let w = (Span::raw(t.title.clone()).width() as u16).min(max_w);
+    Line::from(Span::styled("─".repeat(w as usize), Style::default().fg(theme::LINE)))
 }
 
 fn progress(app: &App, t: &Title) -> Option<Line<'static>> {
@@ -1404,19 +1470,28 @@ mod tests {
             description: "A description long enough to wrap over several rows in the narrow column that sits beside the preview, pushing the buttons down".into(),
             ..Title::default()
         };
-        let mut term = ratatui::Terminal::new(TestBackend::new(200, 60)).unwrap();
-        term.draw(|f| draw_detail(f, &mut a, &t, f.area())).unwrap();
-        let buf = term.backend().buffer().clone();
-        let labels: Vec<String> = a.actions(&t).iter().map(|(_, l, _)| l.to_string()).collect();
-        let mut seen = 0;
-        for (r, h) in &a.hits {
-            if let Hit::Button(i) = h {
-                let under: String = (r.x..r.x + r.width).map(|x| buf[(x, r.y)].symbol().to_string()).collect();
-                assert!(under.contains(labels[*i].as_str()), "button {i} ({}) is clickable over {under:?}", labels[*i]);
-                seen += 1;
+        // beside the preview, tall under it, and one row under it at the minimum size
+        for (w, h, rows) in [(200, 60, 3), (102, 60, 3), (102, 37, 1)] {
+            a.hits.clear();
+            let mut term = ratatui::Terminal::new(TestBackend::new(w, h)).unwrap();
+            term.draw(|f| draw_detail(f, &mut a, &t, f.area())).unwrap();
+            let buf = term.backend().buffer().clone();
+            let labels: Vec<String> = a.actions(&t).iter().map(|(_, l, _)| l.to_string()).collect();
+            let mut found = vec![(0, false); labels.len()];
+            for (r, hit) in &a.hits {
+                if let Hit::Button(i) = hit {
+                    let under: String = (r.x..r.x + r.width).map(|x| buf[(x, r.y)].symbol().to_string()).collect();
+                    // the label's row, or the half-block rows above and under it
+                    let edge = under.chars().all(|c| c == '▄') || under.chars().all(|c| c == '▀');
+                    assert!(edge || under.contains(labels[*i].as_str()), "{w}x{h}: button {i} ({}) is clickable over {under:?}", labels[*i]);
+                    found[*i].0 += 1;
+                    found[*i].1 |= !edge;
+                }
+            }
+            for (i, (n, label)) in found.iter().enumerate() {
+                assert_eq!((*n, *label), (rows, true), "{w}x{h}: button {i} is clickable on all its {rows} rows");
             }
         }
-        assert_eq!(seen, labels.len(), "every button has a click area");
     }
 
     #[test]
