@@ -15,6 +15,8 @@ pub const GREEN: Color = Color::Rgb(0x5f, 0xbf, 0x45);
 pub const GREEN_HI: Color = Color::Rgb(0x7f, 0xdc, 0x5e);
 pub const AMBER: Color = Color::Rgb(0xff, 0xb0, 0x00);
 pub const AMBER_SOFT: Color = Color::Rgb(0xe9, 0xc2, 0x7a);
+/// FRESH!, new to Asciiverse: the website's soft violet
+pub const VIOLET: Color = Color::Rgb(0xb9, 0x9c, 0xff);
 
 // list colors from the design: installed, update available, not installed
 pub const INSTALLED: Color = Color::Rgb(0x7f, 0xdc, 0x5e);

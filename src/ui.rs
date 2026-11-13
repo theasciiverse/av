@@ -17,6 +17,22 @@ use crate::{md, theme};
 // 26 + the 102-column preview keeps av inside 128 columns
 const LIST_W: u16 = 26;
 
+/// The list's tags for a title: NEW! (green) or OLD! (amber), and FRESH!
+/// (violet) while it is new to Asciiverse; the same badges as the website.
+fn title_tags(t: &Title) -> Vec<(&'static str, Style)> {
+    let bold = |c| Style::default().fg(c).add_modifier(Modifier::BOLD);
+    let mut tags = Vec::new();
+    if t.new {
+        tags.push(("NEW!", bold(theme::GREEN_HI)));
+    } else if t.old {
+        tags.push(("OLD!", bold(theme::AMBER)));
+    }
+    if t.is_fresh() {
+        tags.push(("FRESH!", bold(theme::VIOLET)));
+    }
+    tags
+}
+
 pub fn draw(f: &mut Frame, app: &mut App) {
     app.hits.clear();
     let area = f.area();
@@ -403,21 +419,17 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
             Status::Busy => "↓ ",
             Status::NotInstalled => "  ",
         };
-        let (tag, tag_style) = if t.new {
-            ("NEW!", Style::default().fg(theme::GREEN_HI).add_modifier(Modifier::BOLD))
-        } else if t.old {
-            ("OLD!", Style::default().fg(theme::AMBER).add_modifier(Modifier::BOLD))
-        } else {
-            ("", Style::default())
-        };
-        // a tag needs a space before it, so long names give way to it
-        let w = LIST_W.saturating_sub(if tag.is_empty() { 5 } else { 10 }) as usize;
+        let tags = title_tags(t);
+        // each tag needs a space before it, so long names give way to them
+        let tags_w: usize = tags.iter().map(|(tag, _)| tag.len() + 1).sum();
+        let w = (LIST_W.saturating_sub(5) as usize).saturating_sub(tags_w);
         let name: String = t.title.chars().take(w).collect();
-        items.push(ListItem::new(Line::from(vec![
+        let mut spans = vec![
             Span::styled(mark, Style::default().fg(color)),
             Span::styled(format!("{name:<w$}"), Style::default().fg(color)),
-            Span::styled(if tag.is_empty() { String::new() } else { format!(" {tag}") }, tag_style),
-        ])));
+        ];
+        spans.extend(tags.into_iter().map(|(tag, style)| Span::styled(format!(" {tag}"), style)));
+        items.push(ListItem::new(Line::from(spans)));
     }
     let list = List::new(items)
         .block(pane(app.focus == Focus::List, " titles "))

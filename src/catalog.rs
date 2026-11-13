@@ -169,6 +169,9 @@ pub struct Title {
     // storefront curation (the OLD! and NEW! banners); no field in SCHEMA.md yet
     pub old: bool,
     pub new: bool,
+    /// the day the title came to Asciiverse (`YYYY-MM-DD`, written by the
+    /// catalog build from hub's git history); FRESH! reads it, see `is_fresh`
+    pub added: Option<String>,
     /// installed, but no longer in the catalog (see `gone`); not a catalog field
     #[serde(skip)]
     pub gone: bool,
@@ -607,3 +610,94 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
+
+/// FRESH! (David, 2026-11-13): new to Asciiverse, whatever the game's age.
+/// Shown for this many days after `added`, counted from today's date, so it
+/// drops off by itself; titles from the launch day itself never count.
+pub const FRESH_DAYS: i64 = 30;
+pub const LAUNCH_DAY: &str = "2026-11-03";
+
+impl Title {
+    /// Whether the FRESH! tag shows today.
+    pub fn is_fresh(&self) -> bool {
+        self.is_fresh_on(today_days())
+    }
+
+    /// Whether the FRESH! tag shows on the day `today` (days since 1970-01-01).
+    pub fn is_fresh_on(&self, today: i64) -> bool {
+        let Some(added) = self.added.as_deref() else { return false };
+        let (Some(day), Some(launch)) = (day_number(added), day_number(LAUNCH_DAY)) else { return false };
+        day > launch && today - day < FRESH_DAYS
+    }
+}
+
+/// Today, in days since 1970-01-01 (UTC).
+pub fn today_days() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| (d.as_secs() / 86_400) as i64)
+        .unwrap_or(0)
+}
+
+/// `YYYY-MM-DD` as days since 1970-01-01 (Howard Hinnant's days_from_civil),
+/// or None when it is not a date.
+pub fn day_number(date: &str) -> Option<i64> {
+    let mut it = date.get(..10)?.split('-');
+    let y: i64 = it.next()?.parse().ok()?;
+    let m: i64 = it.next()?.parse().ok()?;
+    let d: i64 = it.next()?.parse().ok()?;
+    if !(1..=12).contains(&m) || !(1..=31).contains(&d) {
+        return None;
+    }
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let mp = (m + 9) % 12;
+    let doy = (153 * mp + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    Some(era * 146_097 + doe - 719_468)
+}
+
+#[cfg(test)]
+mod fresh_tests {
+    use super::*;
+
+    fn title(added: Option<&str>) -> Title {
+        Title { added: added.map(Into::into), ..Default::default() }
+    }
+
+    #[test]
+    fn day_numbers() {
+        assert_eq!(day_number("1970-01-01"), Some(0));
+        assert_eq!(day_number("2000-03-01"), Some(11_017));
+        assert_eq!(day_number("2026-11-13"), Some(20_770));
+        assert_eq!(day_number("2026-13-01"), None);
+        assert_eq!(day_number("soon"), None);
+    }
+
+    #[test]
+    fn fresh_for_thirty_days_after_the_launch_only() {
+        let today = day_number("2026-11-13").unwrap();
+        assert!(title(Some("2026-11-13")).is_fresh_on(today));
+        assert!(title(Some("2026-11-04")).is_fresh_on(today));
+        // the launch day itself, and before it, never count
+        assert!(!title(Some("2026-11-03")).is_fresh_on(today));
+        assert!(!title(Some("2026-10-27")).is_fresh_on(today));
+        // 29 days on still fresh, 30 days on not
+        let added = title(Some("2026-11-13"));
+        assert!(added.is_fresh_on(today + 29));
+        assert!(!added.is_fresh_on(today + 30));
+        // a catalog without the field, or a bad date
+        assert!(!title(None).is_fresh_on(today));
+        assert!(!title(Some("someday")).is_fresh_on(today));
+    }
+
+    #[test]
+    fn catalogs_without_added_still_load() {
+        let t: Title = serde_json::from_str(r#"{"id":"x","title":"X","kind":"game"}"#).unwrap();
+        assert_eq!(t.added, None);
+        let t: Title = serde_json::from_str(r#"{"id":"x","title":"X","kind":"game","added":"2026-11-13"}"#).unwrap();
+        assert_eq!(t.added.as_deref(), Some("2026-11-13"));
+    }
+}
+

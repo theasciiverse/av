@@ -133,6 +133,11 @@ and av has had its first public release.
   bin path (macOS) made them scroll on a tall terminal
 - [x] CI green on macOS and Windows again
 
+## 0.9.16: built
+
+- [x] FRESH! in violet beside a title for 30 days after it came to
+  Asciiverse (the catalog's `added`), next to NEW! or OLD!, as on the website
+
 ## 1.0.0
 
 - [ ] Run and checked on macOS and Windows, and CI passing on all three
