@@ -761,8 +761,13 @@ fn facts(app: &App, t: &Title) -> Vec<Line<'static>> {
     if let Some(d) = &t.developer {
         lines.push(fact("Developer", d.name.clone()));
     }
-    if let Some(u) = &t.upstream {
+    if let Some(u) = &t.upstream
+        && t.developer.as_ref().is_none_or(|d| d.name != u.name)
+    {
         lines.push(fact("Original", u.name.clone()));
+    }
+    if t.edition.is_some() {
+        lines.push(fact("Edition", "Asciiverse edition".to_string()));
     }
     if let Some(name) = t.collection_name(&app.collections) {
         let n = app.titles.iter().filter(|o| o.collection == t.collection).count();

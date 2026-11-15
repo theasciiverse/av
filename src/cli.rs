@@ -516,8 +516,13 @@ impl Ctx {
         if let Some(d) = &t.developer {
             println!("{}{}", label("developer"), d.name);
         }
-        if let Some(u) = &t.upstream {
+        if let Some(u) = &t.upstream
+            && t.developer.as_ref().is_none_or(|d| d.name != u.name)
+        {
             println!("{}{}", label("original"), u.name);
+        }
+        if t.edition.is_some() {
+            println!("{}Asciiverse edition", label("edition"));
         }
         if let Some(name) = t.collection_name(&self.collections) {
             let others: Vec<&str> = self.titles.iter().filter(|o| o.collection == t.collection && o.id != t.id).map(|o| o.id.as_str()).collect();

@@ -75,14 +75,34 @@ pub fn rank(t: &Title) -> u8 {
 /// apart by a newline, so no match runs from one into the next.
 pub fn index(titles: &mut [Title], cols: &Collections) {
     for t in titles {
+        resolve_developer(t);
         let mut parts = vec![t.title.as_str(), t.id.as_str(), t.description.as_str()];
         parts.extend(t.topics.iter().map(String::as_str));
         parts.extend(t.genre.as_deref());
         parts.extend(t.developer.as_ref().map(|d| d.name.as_str()));
+        parts.extend(t.upstream.as_ref().map(|u| u.name.as_str()));
+        if t.edition.is_some() {
+            parts.push("asciiverse edition");
+        }
         parts.extend(t.collection.as_deref());
         let name = t.collection_name(cols).map(str::to_string);
         parts.extend(name.as_deref());
         t.haystack = parts.join("\n").to_lowercase();
+    }
+}
+
+/// The developer shown is whoever made the game. A catalog built before
+/// that rule still says Asciiverse for our editions of other people's games
+/// (a [developer] of Asciiverse with an [upstream]); read those the way the
+/// catalog build now writes them: the original's maker as developer, and
+/// `edition` set. Our own games (no upstream) keep Asciiverse.
+pub fn resolve_developer(t: &mut Title) {
+    let ours = t.developer.as_ref().is_some_and(|d| d.name == "Asciiverse");
+    if let (true, Some(up)) = (ours, &t.upstream)
+        && !up.name.is_empty()
+    {
+        t.developer = Some(up.clone());
+        t.edition = Some("asciiverse".to_string());
     }
 }
 
@@ -145,6 +165,10 @@ pub struct Title {
     pub funding: Option<String>,
     pub developer: Option<Person>,
     pub upstream: Option<Person>,
+    /// "asciiverse" when this is our edition of someone else's game: the
+    /// catalog build then names the game's maker as `developer` (see
+    /// `resolve_developer`)
+    pub edition: Option<String>,
     // where it comes from and by whom, and the path in `repo` listing what Asciiverse changed
     pub provenance: Option<String>,
     pub changes: Option<String>,
@@ -699,5 +723,40 @@ mod fresh_tests {
         let t: Title = serde_json::from_str(r#"{"id":"x","title":"X","kind":"game","added":"2026-11-13"}"#).unwrap();
         assert_eq!(t.added.as_deref(), Some("2026-11-13"));
     }
+
+    fn person(name: &str) -> Person {
+        Person { name: name.into(), url: String::new() }
+    }
+
+    #[test]
+    fn an_edition_shows_the_games_maker() {
+        let mut t = Title { developer: Some(person("Asciiverse")), upstream: Some(person("Jan Ringoš")), ..Default::default() };
+        resolve_developer(&mut t);
+        assert_eq!(t.developer.as_ref().unwrap().name, "Jan Ringoš");
+        assert_eq!(t.edition.as_deref(), Some("asciiverse"));
+        // the catalog build already resolved it: nothing changes
+        resolve_developer(&mut t);
+        assert_eq!(t.developer.as_ref().unwrap().name, "Jan Ringoš");
+    }
+
+    #[test]
+    fn our_own_games_keep_asciiverse() {
+        let mut t = Title { developer: Some(person("Asciiverse")), ..Default::default() };
+        resolve_developer(&mut t);
+        assert_eq!(t.developer.as_ref().unwrap().name, "Asciiverse");
+        assert!(t.edition.is_none());
+        let mut other = Title { developer: Some(person("Neil McGill")), upstream: Some(person("Neil McGill")), ..Default::default() };
+        resolve_developer(&mut other);
+        assert!(other.edition.is_none());
+    }
+
+    #[test]
+    fn search_finds_maker_original_and_edition() {
+        let mut ts = vec![Title { id: "x".into(), developer: Some(person("Asciiverse")), upstream: Some(person("Whales")), ..Default::default() }];
+        index(&mut ts, &Collections::default());
+        assert!(ts[0].haystack.contains("whales"));
+        assert!(ts[0].haystack.contains("asciiverse edition"));
+    }
+
 }
 

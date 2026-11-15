@@ -138,6 +138,13 @@ and av has had its first public release.
 - [x] FRESH! in violet beside a title for 30 days after it came to
   Asciiverse (the catalog's `added`), next to NEW! or OLD!, as on the website
 
+## 0.9.17: built
+
+- [x] Developer is whoever made the game: for our edition of someone else's
+  game the catalog names its maker, and "Asciiverse edition" shows as its own
+  quieter fact (details pane and `av info`); search finds maker, original and
+  edition. Older catalogs read the same way
+
 ## 1.0.0
 
 - [ ] Run and checked on macOS and Windows, and CI passing on all three
